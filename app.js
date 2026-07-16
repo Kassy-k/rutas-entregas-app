@@ -140,23 +140,27 @@ function buildBody(list) {
 
 /* ---------- operador: cargar/crear el issue de hoy ---------- */
 async function loadTodayIssue() {
-  const q = `repo:${GITHUB_OWNER}/${GITHUB_REPO} label:"op-${opSlug}" label:"date-${todayISO()}" type:issue`;
-  const found = await gh(`/search/issues?q=${encodeURIComponent(q)}`);
-  if (found.items && found.items.length) {
-    issue = found.items[0];
-  } else {
-    issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
-      method: "POST",
-      body: JSON.stringify({
-        title: `Ruta — ${name} — ${todayISO()}`,
-        body: "",
-        labels: ["ruta", `op-${opSlug}`, `date-${todayISO()}`],
-      }),
-    });
+  try {
+    const q = `repo:${GITHUB_OWNER}/${GITHUB_REPO} label:"op-${opSlug}" label:"date-${todayISO()}" type:issue`;
+    const found = await gh(`/search/issues?q=${encodeURIComponent(q)}`);
+    if (found.items && found.items.length) {
+      issue = found.items[0];
+    } else {
+      issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: `Ruta — ${name} — ${todayISO()}`,
+          body: "",
+          labels: ["ruta", `op-${opSlug}`, `date-${todayISO()}`],
+        }),
+      });
+    }
+    pedidos = parseBody(issue.body);
+    mode = pedidos.length ? "deliver" : "build";
+    render();
+  } catch (err) {
+    renderError("No se pudo cargar tu ruta de hoy: " + err.message, loadTodayIssue);
   }
-  pedidos = parseBody(issue.body);
-  mode = pedidos.length ? "deliver" : "build";
-  render();
 }
 
 async function persistPedidos() {
@@ -227,10 +231,14 @@ async function onPhotosChosen(files) {
 
 /* ---------- admin ---------- */
 async function loadAdmin() {
-  adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=all&per_page=100`);
-  render();
-  await loadActivity();
-  render();
+  try {
+    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=all&per_page=100`);
+    render();
+    await loadActivity();
+    render();
+  } catch (err) {
+    renderError("No se pudo cargar el panel del día: " + err.message, loadAdmin);
+  }
 }
 
 async function loadActivity() {
@@ -260,12 +268,16 @@ function openActivityScreen() {
   render();
 }
 async function openAdminIssue(iss) {
-  adminSelected = iss;
-  adminSelectedPedidos = parseBody(iss.body);
-  adminSelectedComments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments`);
-  pushView("admin-detail", { issue: iss, pedidos: adminSelectedPedidos, comments: adminSelectedComments });
-  render();
-  hydrateAdminPhotos();
+  try {
+    adminSelected = iss;
+    adminSelectedPedidos = parseBody(iss.body);
+    adminSelectedComments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments`);
+    pushView("admin-detail", { issue: iss, pedidos: adminSelectedPedidos, comments: adminSelectedComments });
+    render();
+    hydrateAdminPhotos();
+  } catch (err) {
+    renderError("No se pudo abrir esta ruta: " + err.message, () => openAdminIssue(iss));
+  }
 }
 async function hydrateAdminPhotos() {
   for (const c of adminSelectedComments) {
@@ -355,6 +367,26 @@ function renderNamePrompt() {
 }
 
 function renderCenter() { root.innerHTML = `<div class="center"><div class="spinner"></div></div>`; }
+
+function renderError(message, retryFn) {
+  root.innerHTML = `
+    <div class="landing">
+      <div class="brand">
+        <div class="brand-icon">⚠️</div>
+        <div><div class="brand-name">Algo falló al cargar</div><div class="brand-sub">Puede ser un bache momentáneo de conexión</div></div>
+      </div>
+      <div class="setup-box">
+        <p>${escapeHtml(message)}</p>
+        <button class="btn-primary" id="retry-btn">Reintentar</button>
+        <button class="btn-link" id="back-to-name">Volver al inicio</button>
+      </div>
+    </div>`;
+  document.getElementById("retry-btn").onclick = retryFn;
+  document.getElementById("back-to-name").onclick = () => {
+    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false;
+    pushView("name"); render();
+  };
+}
 
 function headerHtml({ title, subtitle, back, rightHtml }) {
   return `
