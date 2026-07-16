@@ -67,6 +67,36 @@ async function compressImage(file, maxW = 900, quality = 0.6) {
   return dataUrlOut.split(",")[1]; // base64 puro, listo para subir
 }
 
+/* ---------- historial del navegador: para que "atrás" funcione bien ---------- */
+function pushView(view, extra = {}) {
+  history.pushState({ view, ...extra }, "", location.pathname);
+}
+function applyPopState(state) {
+  const s = state || { view: getToken() ? "name" : "setup" };
+  switch (s.view) {
+    case "setup":
+      break;
+    case "name":
+      name = ""; issue = null; pedidos = []; mode = "build";
+      adminSelected = null; showActivity = false;
+      break;
+    case "operator":
+      currentRole = "operador"; adminSelected = null; showActivity = false;
+      break;
+    case "admin-list":
+      currentRole = "admin"; adminSelected = null; showActivity = false;
+      break;
+    case "admin-detail":
+      currentRole = "admin"; showActivity = false;
+      adminSelected = s.issue; adminSelectedPedidos = s.pedidos; adminSelectedComments = s.comments;
+      break;
+    case "activity":
+      currentRole = "admin"; showActivity = true; adminSelected = null;
+      break;
+  }
+}
+window.addEventListener("popstate", (e) => { applyPopState(e.state); render(); });
+
 /* ---------- estado ---------- */
 let name = "";
 let opSlug = "";
@@ -226,12 +256,14 @@ function openActivityScreen() {
   showActivity = true;
   localStorage.setItem("rutas_admin_last_seen", String(Date.now()));
   unreadCount = 0;
+  pushView("activity");
   render();
 }
 async function openAdminIssue(iss) {
   adminSelected = iss;
   adminSelectedPedidos = parseBody(iss.body);
   adminSelectedComments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments`);
+  pushView("admin-detail", { issue: iss, pedidos: adminSelectedPedidos, comments: adminSelectedComments });
   render();
   hydrateAdminPhotos();
 }
@@ -308,6 +340,7 @@ function renderNamePrompt() {
     const val = document.getElementById("name-input").value.trim();
     if (!val) return;
     name = val; opSlug = slug(val); currentRole = "operador";
+    pushView("operator");
     renderCenter();
     await loadTodayIssue();
   };
@@ -315,6 +348,7 @@ function renderNamePrompt() {
   document.getElementById("name-input").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
   document.getElementById("admin-link").onclick = async () => {
     name = "Administrador"; currentRole = "admin";
+    pushView("admin-list");
     renderCenter();
     await loadAdmin();
   };
@@ -389,7 +423,7 @@ function renderOperator() {
 }
 
 function bindOperatorEvents() {
-  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pushView("name"); render(); };
   const addBtn = document.getElementById("add-pedido");
   if (addBtn) addBtn.onclick = () => { const inp = document.getElementById("pedido-input"); addPedido(inp.value); inp.value = ""; };
   const inp = document.getElementById("pedido-input");
@@ -430,7 +464,7 @@ function renderAdmin() {
 
   document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
-  document.getElementById("sign-out").onclick = () => { name = ""; render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; pushView("name"); render(); };
   root.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => openAdminIssue(adminIssues.find((i) => String(i.number) === b.dataset.open)); });
 }
 
@@ -449,7 +483,7 @@ function renderActivity() {
           </div>
         </div>`).join("")}
     </div>`;
-  document.getElementById("back-btn").onclick = () => { showActivity = false; render(); };
+  document.getElementById("back-btn").onclick = () => history.back();
 }
 
 function renderAdminDetail() {
@@ -486,7 +520,9 @@ function renderAdminDetail() {
       }).join("")}
     </div>`;
 
-  document.getElementById("back-btn").onclick = () => { adminSelected = null; render(); };
+  document.getElementById("back-btn").onclick = () => history.back();
+  hydrateAdminPhotos();
 }
 
+if (!history.state) history.replaceState({ view: getToken() ? "name" : "setup" }, "", location.pathname);
 render();
