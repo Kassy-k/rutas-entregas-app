@@ -81,6 +81,23 @@ let adminIssues = [];
 let adminSelected = null;
 let adminSelectedComments = [];
 let adminSelectedPedidos = [];
+let activityFeed = [];
+let unreadCount = 0;
+let showActivity = false;
+
+/* ---------- visor de fotos en grande ---------- */
+function showLightbox(src) {
+  let lb = document.getElementById("lightbox-overlay");
+  if (!lb) {
+    lb = document.createElement("div");
+    lb.id = "lightbox-overlay";
+    lb.className = "lightbox";
+    document.body.appendChild(lb);
+  }
+  lb.innerHTML = `<button class="lightbox-close" id="lightbox-close">✕</button><img src="${src}" />`;
+  lb.style.display = "flex";
+  lb.onclick = (e) => { if (e.target === lb || e.target.id === "lightbox-close") lb.style.display = "none"; };
+}
 
 /* ---------- parseo del checklist en el body del issue ---------- */
 function parseBody(body) {
@@ -182,6 +199,34 @@ async function onPhotosChosen(files) {
 async function loadAdmin() {
   adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=all&per_page=100`);
   render();
+  await loadActivity();
+  render();
+}
+
+async function loadActivity() {
+  const all = [];
+  for (const iss of adminIssues) {
+    try {
+      const comments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments?per_page=50`);
+      const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+      comments.forEach((c) => {
+        if (c.body.startsWith("📦") || c.body.startsWith("↕️")) {
+          all.push({ id: c.id, message: c.body.split("\n")[0], created_at: c.created_at });
+        }
+      });
+    } catch { /* si un issue falla, seguimos con los demás */ }
+  }
+  all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  activityFeed = all.slice(0, 50);
+  const lastSeen = Number(localStorage.getItem("rutas_admin_last_seen") || 0);
+  unreadCount = activityFeed.filter((e) => new Date(e.created_at).getTime() > lastSeen).length;
+}
+
+function openActivityScreen() {
+  showActivity = true;
+  localStorage.setItem("rutas_admin_last_seen", String(Date.now()));
+  unreadCount = 0;
+  render();
 }
 async function openAdminIssue(iss) {
   adminSelected = iss;
@@ -200,7 +245,9 @@ async function hydrateAdminPhotos() {
       if (img && !img.src) {
         try {
           const blob = await ghRaw(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${p}`);
-          img.src = URL.createObjectURL(blob);
+          const url = URL.createObjectURL(blob);
+          img.src = url;
+          img.onclick = () => showLightbox(url);
         } catch { /* foto no disponible */ }
       }
     }
@@ -357,7 +404,9 @@ function bindOperatorEvents() {
 
 function renderAdmin() {
   if (adminSelected) return renderAdminDetail();
+  if (showActivity) return renderActivity();
   const right = `<div class="header-right">
+    <button class="icon" id="bell-btn" style="position:relative;">🔔${unreadCount > 0 ? `<span class="badge-dot">${unreadCount}</span>` : ""}</button>
     <button class="icon" id="refresh-btn">⟳</button>
     <button class="icon" id="sign-out">⎋</button>
   </div>`;
@@ -379,9 +428,28 @@ function renderAdmin() {
     ${headerHtml({ title: "Panel del día", subtitle: todayISO(), rightHtml: right })}
     <div class="container">${!adminIssues.length ? `<div class="empty">Ningún operador ha iniciado ruta hoy.</div>` : rows}</div>`;
 
+  document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
   document.getElementById("sign-out").onclick = () => { name = ""; render(); };
   root.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => openAdminIssue(adminIssues.find((i) => String(i.number) === b.dataset.open)); });
+}
+
+function renderActivity() {
+  root.innerHTML = `
+    ${headerHtml({ title: "Notificaciones", subtitle: "Cambios de orden y evidencia reportada", back: true })}
+    <div class="container">
+      ${!activityFeed.length ? `<div class="empty">Aún no hay actividad registrada hoy.</div>` : activityFeed.map((e) => `
+        <div class="stop-row" style="align-items:flex-start;">
+          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : "var(--amber)"};">
+            ${e.message.startsWith("📦") ? "📷" : "↕"}
+          </div>
+          <div style="flex:1;">
+            <div style="font-size:13.5px;">${escapeHtml(e.message)}</div>
+            <div class="mono" style="font-size:11px;color:#94A3B8;margin-top:2px;">${timeAgo(e.created_at)}</div>
+          </div>
+        </div>`).join("")}
+    </div>`;
+  document.getElementById("back-btn").onclick = () => { showActivity = false; render(); };
 }
 
 function renderAdminDetail() {
