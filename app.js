@@ -141,10 +141,9 @@ function buildBody(list) {
 /* ---------- operador: cargar/crear el issue de hoy ---------- */
 async function loadTodayIssue() {
   try {
-    const q = `repo:${GITHUB_OWNER}/${GITHUB_REPO} label:"op-${opSlug}" label:"date-${todayISO()}" type:issue`;
-    const found = await gh(`/search/issues?q=${encodeURIComponent(q)}`);
-    if (found.items && found.items.length) {
-      issue = found.items[0];
+    const list = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=op-${opSlug},date-${todayISO()}&state=all`);
+    if (list && list.length) {
+      issue = list[0];
     } else {
       issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
         method: "POST",
