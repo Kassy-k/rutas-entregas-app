@@ -22,6 +22,16 @@ function getToken() { return localStorage.getItem("rutas_gh_token") || ""; }
 function setToken(t) { localStorage.setItem("rutas_gh_token", t.trim()); }
 function clearToken() { localStorage.removeItem("rutas_gh_token"); }
 
+/* ---------- cuántos "finalizados" ya vio el admin, por ruta ---------- */
+function getSeenCounts() {
+  try { return JSON.parse(localStorage.getItem("rutas_admin_seen_counts") || "{}"); } catch { return {}; }
+}
+function markRouteSeen(issueNumber, count) {
+  const seen = getSeenCounts();
+  seen[issueNumber] = count;
+  localStorage.setItem("rutas_admin_seen_counts", JSON.stringify(seen));
+}
+
 /* ---------- llamadas a GitHub ---------- */
 async function gh(path, opts = {}) {
   const res = await fetch(`${API}${path}`, {
@@ -180,6 +190,10 @@ function addPedido(text) {
   if (!text.trim()) return;
   pedidos.push({ id: newId(), text: text.trim(), done: false });
   render();
+  if (mode === "deliver") {
+    persistPedidos();
+    addComment(`➕ ${name} agregó un nuevo pedido a su ruta: ${text.trim()}`);
+  }
 }
 function removePedido(i) { pedidos.splice(i, 1); render(); }
 function movePedido(i, dir) {
@@ -265,7 +279,7 @@ async function loadActivity() {
       const comments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments?per_page=50`);
       const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
       comments.forEach((c) => {
-        if (c.body.startsWith("📦") || c.body.startsWith("↕️")) {
+        if (c.body.startsWith("📦") || c.body.startsWith("↕️") || c.body.startsWith("➕")) {
           all.push({ id: c.id, message: c.body.split("\n")[0], created_at: c.created_at });
         }
       });
@@ -289,6 +303,7 @@ async function openAdminIssue(iss) {
     adminSelected = iss;
     adminSelectedPedidos = parseBody(iss.body);
     adminSelectedComments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments`);
+    markRouteSeen(iss.number, adminSelectedPedidos.filter((p) => p.done).length);
     pushView("admin-detail", { issue: iss, pedidos: adminSelectedPedidos, comments: adminSelectedComments });
     render();
     hydrateAdminPhotos();
@@ -474,6 +489,10 @@ function renderOperator() {
           `}
         </div>`;
       }).join("")}
+      <div class="row-input" style="max-width:none;margin-top:14px;">
+        <input type="text" id="pedido-extra-input" placeholder="Agregar otro pedido a la ruta" style="flex:1" />
+        <button class="btn-primary" id="add-pedido-extra" style="padding:0 14px;">+</button>
+      </div>
       ${delivered === pedidos.length && pedidos.length > 0 ? `<div class="done-msg">Ruta completa. Buen trabajo.</div>` : ""}
     `;
   }
@@ -492,6 +511,10 @@ function bindOperatorEvents() {
   if (addBtn) addBtn.onclick = () => { const inp = document.getElementById("pedido-input"); addPedido(inp.value); inp.value = ""; };
   const inp = document.getElementById("pedido-input");
   if (inp) inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { addPedido(inp.value); inp.value = ""; } });
+  const extraBtn = document.getElementById("add-pedido-extra");
+  if (extraBtn) extraBtn.onclick = () => { const i = document.getElementById("pedido-extra-input"); addPedido(i.value); i.value = ""; };
+  const extraInp = document.getElementById("pedido-extra-input");
+  if (extraInp) extraInp.addEventListener("keydown", (e) => { if (e.key === "Enter") { addPedido(extraInp.value); extraInp.value = ""; } });
   const startBtn = document.getElementById("start-route");
   if (startBtn) startBtn.onclick = startDeliveries;
   root.querySelectorAll("[data-move]").forEach((b) => { b.onclick = () => { const [i, d] = b.dataset.move.split(":"); movePedido(Number(i), Number(d)); }; });
@@ -510,13 +533,15 @@ function renderAdmin() {
     <button class="icon" id="refresh-btn">⟳</button>
     <button class="icon" id="sign-out">⎋</button>
   </div>`;
+  const seenCounts = getSeenCounts();
   const rows = adminIssues.map((iss) => {
     const list = parseBody(iss.body);
     const done = list.filter((p) => p.done).length;
+    const unseen = Math.max(0, done - (seenCounts[iss.number] || 0));
     const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
     return `
       <button class="stop-row clickable" data-open="${iss.number}" style="position:relative;">
-        ${done > 0 ? `<div class="route-count-badge">${done}</div>` : ""}
+        ${unseen > 0 ? `<div class="route-count-badge">${unseen}</div>` : ""}
         <div class="stop-badge ${done === list.length && list.length > 0 ? "done" : ""}">👤</div>
         <div style="flex:1;text-align:left;">
           <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
@@ -541,8 +566,8 @@ function renderActivity() {
     <div class="container">
       ${!activityFeed.length ? `<div class="empty">Aún no hay actividad registrada hoy.</div>` : activityFeed.map((e) => `
         <div class="stop-row" style="align-items:flex-start;">
-          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : "var(--amber)"};">
-            ${e.message.startsWith("📦") ? "📷" : "↕"}
+          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : e.message.startsWith("➕") ? "#2563EB" : "var(--amber)"};">
+            ${e.message.startsWith("📦") ? "📷" : e.message.startsWith("➕") ? "➕" : "↕"}
           </div>
           <div style="flex:1;">
             <div style="font-size:13.5px;">${escapeHtml(e.message)}</div>
