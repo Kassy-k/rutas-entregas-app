@@ -18,18 +18,20 @@ const slug = (s) => (s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").r
 const escapeHtml = (str) => (str ?? "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /* ---------- token: solo en este navegador ---------- */
-function getToken() { return localStorage.getItem("rutas_gh_token") || ""; }
-function setToken(t) { localStorage.setItem("rutas_gh_token", t.trim()); }
-function clearToken() { localStorage.removeItem("rutas_gh_token"); }
+function getToken() { try { return localStorage.getItem("rutas_gh_token") || ""; } catch { return ""; } }
+function setToken(t) { try { localStorage.setItem("rutas_gh_token", t.trim()); } catch { /* algunos navegadores bloquean el guardado local */ } }
+function clearToken() { try { localStorage.removeItem("rutas_gh_token"); } catch { /* ignorar */ } }
 
 /* ---------- cuántos "finalizados" ya vio el admin, por ruta ---------- */
 function getSeenCounts() {
   try { return JSON.parse(localStorage.getItem("rutas_admin_seen_counts") || "{}"); } catch { return {}; }
 }
 function markRouteSeen(issueNumber, count) {
-  const seen = getSeenCounts();
-  seen[issueNumber] = count;
-  localStorage.setItem("rutas_admin_seen_counts", JSON.stringify(seen));
+  try {
+    const seen = getSeenCounts();
+    seen[issueNumber] = count;
+    localStorage.setItem("rutas_admin_seen_counts", JSON.stringify(seen));
+  } catch { /* ignorar */ }
 }
 
 /* ---------- llamadas a GitHub ---------- */
@@ -287,13 +289,14 @@ async function loadActivity() {
   }
   all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   activityFeed = all.slice(0, 50);
-  const lastSeen = Number(localStorage.getItem("rutas_admin_last_seen") || 0);
+  let lastSeen = 0;
+  try { lastSeen = Number(localStorage.getItem("rutas_admin_last_seen") || 0); } catch { /* ignorar */ }
   unreadCount = activityFeed.filter((e) => new Date(e.created_at).getTime() > lastSeen).length;
 }
 
 function openActivityScreen() {
   showActivity = true;
-  localStorage.setItem("rutas_admin_last_seen", String(Date.now()));
+  try { localStorage.setItem("rutas_admin_last_seen", String(Date.now())); } catch { /* ignorar */ }
   unreadCount = 0;
   pushView("activity");
   render();
@@ -615,6 +618,22 @@ function renderAdminDetail() {
   document.getElementById("back-btn").onclick = () => history.back();
   hydrateAdminPhotos();
 }
+
+/* ---------- red de seguridad: mostrar cualquier error en pantalla ---------- */
+window.addEventListener("error", (e) => {
+  root.innerHTML = `<div class="landing"><div class="setup-box">
+    <p style="color:var(--danger);font-weight:700;">Error inesperado (mándale captura de esto a soporte):</p>
+    <p style="font-family:monospace;font-size:11px;word-break:break-all;">${escapeHtml(e.message)} — ${escapeHtml(String(e.filename || ""))}:${e.lineno || ""}</p>
+    <button class="btn-primary" onclick="location.reload()">Recargar</button>
+  </div></div>`;
+});
+window.addEventListener("unhandledrejection", (e) => {
+  root.innerHTML = `<div class="landing"><div class="setup-box">
+    <p style="color:var(--danger);font-weight:700;">Error inesperado (mándale captura de esto a soporte):</p>
+    <p style="font-family:monospace;font-size:11px;word-break:break-all;">${escapeHtml(e.reason?.message || String(e.reason))}</p>
+    <button class="btn-primary" onclick="location.reload()">Recargar</button>
+  </div></div>`;
+});
 
 if (!history.state) history.replaceState({ view: getToken() ? "name" : "setup" }, "", location.pathname);
 render();
