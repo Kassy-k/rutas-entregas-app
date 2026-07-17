@@ -130,9 +130,10 @@ function showLightbox(src) {
 }
 
 /* ---------- parseo del checklist en el body del issue ---------- */
+function newId() { return `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`; }
 function parseBody(body) {
   return (body || "").split("\n").filter((l) => l.trim().startsWith("- ["))
-    .map((l) => ({ done: /^- \[x\]/i.test(l.trim()), text: l.replace(/^- \[[ xX]\]\s*/, "").trim() }));
+    .map((l) => ({ id: newId(), done: /^- \[x\]/i.test(l.trim()), text: l.replace(/^- \[[ xX]\]\s*/, "").trim() }));
 }
 function buildBody(list) {
   return list.map((p) => `- [${p.done ? "x" : " "}] ${p.text}`).join("\n");
@@ -177,7 +178,7 @@ async function addComment(message) {
 
 function addPedido(text) {
   if (!text.trim()) return;
-  pedidos.push({ text: text.trim(), done: false });
+  pedidos.push({ id: newId(), text: text.trim(), done: false });
   render();
 }
 function removePedido(i) { pedidos.splice(i, 1); render(); }
@@ -198,28 +199,45 @@ function startDeliveries() {
   render();
 }
 
-let pendingIndex = null;
-function openCamera(i) { pendingIndex = i; document.getElementById("photo-input").click(); }
-async function onPhotosChosen(files) {
-  if (!files.length || pendingIndex === null) return;
-  const i = pendingIndex;
+let pendingPhotos = {}; // pedidoId -> [{file, previewUrl}]
+let pendingCameraTarget = null;
+
+function openCamera(pedidoId) { pendingCameraTarget = pedidoId; document.getElementById("photo-input").click(); }
+
+function onPhotosChosen(files) {
+  if (!files.length || !pendingCameraTarget) return;
+  const id = pendingCameraTarget;
+  if (!pendingPhotos[id]) pendingPhotos[id] = [];
+  files.forEach((file) => pendingPhotos[id].push({ file, previewUrl: URL.createObjectURL(file) }));
+  render();
+}
+function removePendingPhoto(pedidoId, idx) {
+  pendingPhotos[pedidoId]?.splice(idx, 1);
+  render();
+}
+
+async function finalizarPedido(pedidoId) {
+  const staged = pendingPhotos[pedidoId] || [];
+  if (!staged.length) { alert("Agrega al menos una foto antes de finalizar."); return; }
+  const pedido = pedidos.find((p) => p.id === pedidoId);
   uploading = true; render();
   try {
     const stamp = Date.now();
     const paths = [];
-    for (let n = 0; n < files.length; n++) {
-      const b64 = await compressImage(files[n]);
+    for (let n = 0; n < staged.length; n++) {
+      const b64 = await compressImage(staged[n].file);
       const path = `evidence/${opSlug}/${todayISO()}/${stamp}-${n}.jpg`;
       await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`, {
         method: "PUT",
-        body: JSON.stringify({ message: `Evidencia: ${pedidos[i].text}`, content: b64 }),
+        body: JSON.stringify({ message: `Evidencia: ${pedido.text}`, content: b64 }),
       });
       paths.push(path);
     }
-    pedidos[i].done = true;
+    pedido.done = true;
     await persistPedidos();
     const time = timeLabel(new Date().toISOString());
-    await addComment(`📦 ${pedidos[i].text} — entregado ${time}\nFotos: ${paths.join(", ")}`);
+    await addComment(`📦 ${pedido.text} — finalizado ${time}\nFotos: ${paths.join(", ")}`);
+    delete pendingPhotos[pedidoId];
     render();
   } catch (err) {
     alert("No se pudo subir la evidencia: " + err.message);
@@ -425,13 +443,15 @@ function renderOperator() {
     const pct = pedidos.length ? Math.round((delivered / pedidos.length) * 100) : 0;
     body = `
       <div class="progress-wrap">
-        <div class="progress-labels"><span class="mono">${delivered}/${pedidos.length} entregados</span><span class="mono">${pct}%</span></div>
+        <div class="progress-labels"><span class="mono">${delivered}/${pedidos.length} finalizados</span><span class="mono">${pct}%</span></div>
         <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
       </div>
       <div class="hint">↕ Puedes reordenar tus pedidos pendientes cuando haga falta.</div>
-      ${pedidos.map((p, i) => `
+      ${pedidos.map((p, i) => {
+        const staged = pendingPhotos[p.id] || [];
+        return `
         <div class="stop-row deliver">
-          ${p.done ? `<div class="stamp">ENTREGADO</div>` : ""}
+          ${p.done ? `<div class="stamp">FINALIZADO</div>` : ""}
           <div style="display:flex;align-items:center;gap:10px;width:100%;">
             <div class="stop-badge ${p.done ? "done" : ""}">${i + 1}</div>
             <div class="stop-address">${escapeHtml(p.text)}</div>
@@ -439,22 +459,35 @@ function renderOperator() {
               <button class="btn-icon" data-move="${i}:-1" ${i === 0 ? "disabled" : ""}>↑</button>
               <button class="btn-icon" data-move="${i}:1" ${i === pedidos.length - 1 ? "disabled" : ""}>↓</button>` : ""}
           </div>
-          ${!p.done ? `<button class="btn-secondary" data-deliver="${i}">📷 Marcar entregado + fotos</button>` : `<div class="mono" style="font-size:12px;color:var(--route);">✓ registrado</div>`}
-        </div>`).join("")}
+          ${p.done ? `<div class="mono" style="font-size:12px;color:var(--route);">✓ finalizado</div>` : `
+            ${staged.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${staged.map((s, sIdx) => `
+                <div style="position:relative;">
+                  <img src="${s.previewUrl}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--line);" />
+                  <button data-remove-photo="${p.id}:${sIdx}" style="position:absolute;top:-6px;right:-6px;background:var(--danger);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:11px;cursor:pointer;">✕</button>
+                </div>`).join("")}
+            </div>` : ""}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn-secondary" data-addphoto="${p.id}">📷 Agregar foto</button>
+              ${staged.length ? `<button class="btn-primary" style="padding:9px 14px;font-size:12.5px;" data-finalize="${p.id}">✅ Finalizar (${staged.length} foto${staged.length > 1 ? "s" : ""})</button>` : ""}
+            </div>
+          `}
+        </div>`;
+      }).join("")}
       ${delivered === pedidos.length && pedidos.length > 0 ? `<div class="done-msg">Ruta completa. Buen trabajo.</div>` : ""}
     `;
   }
 
   root.innerHTML = `
     <input type="file" accept="image/*" capture="environment" multiple id="photo-input" style="display:none" />
-    ${headerHtml({ title: name, subtitle: mode === "build" ? "Armando ruta" : `${delivered}/${pedidos.length} entregados`, rightHtml: right })}
+    ${headerHtml({ title: name, subtitle: mode === "build" ? "Armando ruta" : `${delivered}/${pedidos.length} finalizados`, rightHtml: right })}
     <div class="container">${body}</div>`;
 
   bindOperatorEvents();
 }
 
 function bindOperatorEvents() {
-  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; pushView("name"); render(); };
   const addBtn = document.getElementById("add-pedido");
   if (addBtn) addBtn.onclick = () => { const inp = document.getElementById("pedido-input"); addPedido(inp.value); inp.value = ""; };
   const inp = document.getElementById("pedido-input");
@@ -463,7 +496,9 @@ function bindOperatorEvents() {
   if (startBtn) startBtn.onclick = startDeliveries;
   root.querySelectorAll("[data-move]").forEach((b) => { b.onclick = () => { const [i, d] = b.dataset.move.split(":"); movePedido(Number(i), Number(d)); }; });
   root.querySelectorAll("[data-remove]").forEach((b) => { b.onclick = () => removePedido(Number(b.dataset.remove)); });
-  root.querySelectorAll("[data-deliver]").forEach((b) => { b.onclick = () => openCamera(Number(b.dataset.deliver)); });
+  root.querySelectorAll("[data-addphoto]").forEach((b) => { b.onclick = () => openCamera(b.dataset.addphoto); });
+  root.querySelectorAll("[data-remove-photo]").forEach((b) => { b.onclick = () => { const [pid, idx] = b.dataset.removePhoto.split(":"); removePendingPhoto(pid, Number(idx)); }; });
+  root.querySelectorAll("[data-finalize]").forEach((b) => { b.onclick = () => finalizarPedido(b.dataset.finalize); });
   document.getElementById("photo-input").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
 }
 
@@ -484,7 +519,7 @@ function renderAdmin() {
         <div class="stop-badge ${done === list.length && list.length > 0 ? "done" : ""}">👤</div>
         <div style="flex:1;text-align:left;">
           <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
-          <div class="mono" style="font-size:11.5px;color:#94A3B8;">${done}/${list.length} entregados</div>
+          <div class="mono" style="font-size:11.5px;color:#94A3B8;">${done}/${list.length} finalizados</div>
         </div>
       </button>`;
   }).join("");
@@ -528,7 +563,7 @@ function renderAdminDetail() {
     ${headerHtml({ title: adminSelected.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim(), subtitle: "Detalle de ruta", back: true })}
     <div class="container">
       <div class="progress-wrap">
-        <div class="progress-labels"><span class="mono">${done}/${total} entregados</span><span class="mono">${pct}%</span></div>
+        <div class="progress-labels"><span class="mono">${done}/${total} finalizados</span><span class="mono">${pct}%</span></div>
         <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
       </div>
       ${adminSelectedPedidos.map((p, i) => `
