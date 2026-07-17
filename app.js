@@ -515,7 +515,8 @@ function renderAdmin() {
     const done = list.filter((p) => p.done).length;
     const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
     return `
-      <button class="stop-row clickable" data-open="${iss.number}">
+      <button class="stop-row clickable" data-open="${iss.number}" style="position:relative;">
+        ${done > 0 ? `<div class="route-count-badge">${done}</div>` : ""}
         <div class="stop-badge ${done === list.length && list.length > 0 ? "done" : ""}">👤</div>
         <div style="flex:1;text-align:left;">
           <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
