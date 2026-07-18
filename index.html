@@ -8,7 +8,33 @@
 </head>
 <body>
   <div id="app"><div class="center"><div class="spinner"></div></div></div>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+
+  <script>
+    function showFatalError(msg) {
+      var app = document.getElementById("app");
+      if (!app) return;
+      app.innerHTML =
+        '<div style="font-family:system-ui,sans-serif;padding:40px 20px;max-width:380px;margin:0 auto;text-align:center;">' +
+        '<div style="font-weight:800;font-size:18px;color:#DC2626;margin-bottom:8px;">No se pudo cargar la app</div>' +
+        '<div style="font-size:12px;color:#475569;word-break:break-all;margin-bottom:16px;">' + msg + '</div>' +
+        '<button onclick="location.reload()" style="background:#F59E0B;border:none;border-radius:8px;padding:10px 20px;font-weight:700;">Reintentar</button>' +
+        '</div>';
+    }
+    window.addEventListener("error", function (e) {
+      showFatalError((e.message || "Error desconocido") + (e.filename ? " — " + e.filename + ":" + e.lineno : ""));
+    });
+    window.addEventListener("unhandledrejection", function (e) {
+      showFatalError((e.reason && e.reason.message) || String(e.reason));
+    });
+    setTimeout(function () {
+      var app = document.getElementById("app");
+      if (app && app.querySelector(".spinner")) {
+        showFatalError("La app tardó demasiado en responder. Puede ser tu conexión a internet, o que este navegador no sea compatible.");
+      }
+    }, 8000);
+  </script>
+
+  <script src="config.js" onerror="showFatalError('No se pudo cargar config.js — revisa tu conexión a internet.')"></script>
+  <script src="app.js" onerror="showFatalError('No se pudo cargar app.js — revisa tu conexión a internet.')"></script>
 </body>
 </html>
