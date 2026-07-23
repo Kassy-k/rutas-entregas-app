@@ -120,6 +120,7 @@ let uploading = false;
 let currentRole = "operador";
 
 let adminIssues = [];
+let adminDate = todayISO();
 let adminSelected = null;
 let adminSelectedComments = [];
 let adminSelectedPedidos = [];
@@ -265,12 +266,12 @@ async function finalizarPedido(pedidoId) {
 /* ---------- admin ---------- */
 async function loadAdmin() {
   try {
-    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=all&per_page=100`);
+    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=all&per_page=100`);
     render();
     await loadActivity();
     render();
   } catch (err) {
-    renderError("No se pudo cargar el panel del día: " + err.message, loadAdmin);
+    renderError("No se pudo cargar el panel del " + adminDate + ": " + err.message, loadAdmin);
   }
 }
 
@@ -394,7 +395,7 @@ function renderNamePrompt() {
   document.getElementById("enter-btn").onclick = go;
   document.getElementById("name-input").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
   document.getElementById("admin-link").onclick = async () => {
-    name = "Administrador"; currentRole = "admin";
+    name = "Administrador"; currentRole = "admin"; adminDate = todayISO();
     pushView("admin-list");
     renderCenter();
     await loadAdmin();
@@ -554,9 +555,15 @@ function renderAdmin() {
   }).join("");
 
   root.innerHTML = `
-    ${headerHtml({ title: "Panel del día", subtitle: todayISO(), rightHtml: right })}
-    <div class="container">${!adminIssues.length ? `<div class="empty">Ningún operador ha iniciado ruta hoy.</div>` : rows}</div>`;
+    ${headerHtml({ title: "Panel de rutas", subtitle: adminDate === todayISO() ? "Hoy" : adminDate, rightHtml: right })}
+    <div class="container">
+      <div class="row-input" style="max-width:none;margin-bottom:16px;">
+        <input type="date" id="admin-date" value="${adminDate}" max="${todayISO()}" style="flex:1;" />
+      </div>
+      ${!adminIssues.length ? `<div class="empty">Ningún operador registró ruta este día.</div>` : rows}
+    </div>`;
 
+  document.getElementById("admin-date").onchange = (e) => { adminDate = e.target.value; loadAdmin(); };
   document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
   document.getElementById("sign-out").onclick = () => { name = ""; pushView("name"); render(); };
