@@ -56,7 +56,7 @@ body {
 .role-card .rc-title { font-weight: 700; font-size: 15px; margin: 10px 0 4px; }
 .role-card .rc-desc { font-size: 12.5px; color: var(--slate); }
 
-input[type="text"], input[type="email"] {
+input[type="text"], input[type="email"], input[type="date"] {
   border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px;
   font-family: inherit; outline: none; color: var(--ink); background: #fff;
 }
