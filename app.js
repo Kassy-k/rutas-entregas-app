@@ -264,12 +264,30 @@ async function finalizarPedido(pedidoId) {
 }
 
 /* ---------- admin ---------- */
+let adminPollTimer = null;
+function startAdminPolling() {
+  stopAdminPolling();
+  adminPollTimer = setInterval(silentRefreshAdmin, 20000);
+}
+function stopAdminPolling() {
+  if (adminPollTimer) { clearInterval(adminPollTimer); adminPollTimer = null; }
+}
+async function silentRefreshAdmin() {
+  if (currentRole !== "admin" || adminSelected || showActivity) return;
+  try {
+    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=all&per_page=100`);
+    await loadActivity();
+    if (currentRole === "admin" && !adminSelected && !showActivity) render();
+  } catch { /* falla silenciosa: no interrumpir al admin con errores de fondo */ }
+}
+
 async function loadAdmin() {
   try {
     adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=all&per_page=100`);
     render();
     await loadActivity();
     render();
+    startAdminPolling();
   } catch (err) {
     renderError("No se pudo cargar el panel del " + adminDate + ": " + err.message, loadAdmin);
   }
@@ -566,7 +584,7 @@ function renderAdmin() {
   document.getElementById("admin-date").onchange = (e) => { adminDate = e.target.value; loadAdmin(); };
   document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
-  document.getElementById("sign-out").onclick = () => { name = ""; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; stopAdminPolling(); pushView("name"); render(); };
   root.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => openAdminIssue(adminIssues.find((i) => String(i.number) === b.dataset.open)); });
 }
 
