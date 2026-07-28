@@ -5,7 +5,10 @@
 const API = "https://api.github.com";
 const root = document.getElementById("app");
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = () => {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+};
 const timeLabel = (iso) => new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
 const timeAgo = (iso) => {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -233,10 +236,14 @@ function removePendingPhoto(pedidoId, idx) {
   render();
 }
 
+let finalizingIds = new Set();
+
 async function finalizarPedido(pedidoId) {
+  if (finalizingIds.has(pedidoId)) return; // ya se está subiendo esta evidencia, ignorar el toque repetido
   const staged = pendingPhotos[pedidoId] || [];
   if (!staged.length) { alert("Agrega al menos una foto antes de finalizar."); return; }
   const pedido = pedidos.find((p) => p.id === pedidoId);
+  finalizingIds.add(pedidoId);
   uploading = true; render();
   try {
     const stamp = Date.now();
@@ -259,6 +266,7 @@ async function finalizarPedido(pedidoId) {
   } catch (err) {
     alert("No se pudo subir la evidencia: " + err.message);
   } finally {
+    finalizingIds.delete(pedidoId);
     uploading = false; render();
   }
 }
@@ -506,7 +514,10 @@ function renderOperator() {
             </div>` : ""}
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button class="btn-secondary" data-addphoto="${p.id}">📷 Agregar foto</button>
-              ${staged.length ? `<button class="btn-primary" style="padding:9px 14px;font-size:12.5px;" data-finalize="${p.id}">✅ Finalizar (${staged.length} foto${staged.length > 1 ? "s" : ""})</button>` : ""}
+              ${staged.length ? (finalizingIds.has(p.id)
+                ? `<button class="btn-primary" disabled style="padding:9px 14px;font-size:12.5px;opacity:0.6;">Subiendo…</button>`
+                : `<button class="btn-primary" style="padding:9px 14px;font-size:12.5px;" data-finalize="${p.id}">✅ Finalizar (${staged.length} foto${staged.length > 1 ? "s" : ""})</button>`
+              ) : ""}
             </div>
           `}
         </div>`;
