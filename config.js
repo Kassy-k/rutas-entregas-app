@@ -4,3 +4,8 @@
 
 const GITHUB_OWNER = "Kassy-k";
 const GITHUB_REPO = "rutas-entregas";
+
+// Hoja de Google Sheets de donde se leen los pedidos por jaula cada día.
+// Debe estar compartida como "cualquiera con el link puede ver".
+const SHEET_ID = "1656iFzAPgTj854pqa1uq2VzdGhnx0YaYy7hkGuxdB3A";
+const SHEET_GID = "1493340440";
