@@ -18,6 +18,123 @@ const timeAgo = (iso) => {
   return `hace ${Math.floor(s / 86400)} d`;
 };
 const slug = (s) => (s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "op";
+const normalize = (s) => (s || "").toString().trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field); rows.push(row); row = []; field = "";
+      } else field += c;
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((v) => v !== ""));
+}
+
+function matchesToday(fechaRaw) {
+  const d = new Date();
+  const day = String(d.getDate());
+  const month = MESES_ES[d.getMonth()];
+  const norm = normalize(fechaRaw);
+  return norm.includes(day) && norm.includes(month);
+}
+
+async function fetchSheetData() {
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("La hoja de Sheets respondió con un error (status " + res.status + ")");
+  const rows = parseCSV(await res.text());
+  if (!rows.length) return { col: {}, rows: [] };
+  const header = rows[0].map(normalize);
+  const idx = (name) => header.indexOf(normalize(name));
+  const col = { fecha: idx("FECHA"), pedido: idx("pedido"), jaula: idx("Jaula"), colonia: idx("COLONIA") };
+  const dataRows = rows.slice(1).filter((r) => col.pedido >= 0 && (r[col.pedido] || "").trim());
+  return { col, rows: dataRows };
+}
+
+/* ---------- elegir jaula (pedidos automáticos desde Sheets) ---------- */
+let showJaulaPicker = false;
+let jaulaData = {};
+let sheetCol = {};
+let jaulaLoading = false;
+
+async function loadJaulaOptions() {
+  jaulaLoading = true; showJaulaPicker = true; render();
+  try {
+    const { col, rows } = await fetchSheetData();
+    sheetCol = col;
+    const todays = rows.filter((r) => matchesToday(r[col.fecha]));
+    const byJaula = {};
+    todays.forEach((r) => {
+      const j = (r[col.jaula] || "").trim();
+      if (!j) return;
+      if (!byJaula[j]) byJaula[j] = [];
+      byJaula[j].push(r);
+    });
+    jaulaData = byJaula;
+  } catch (err) {
+    renderError("No se pudo leer la hoja de rutas: " + err.message, loadJaulaOptions);
+    return;
+  } finally {
+    jaulaLoading = false;
+  }
+  render();
+}
+
+async function chooseJaula(jaulaKey) {
+  const rows = jaulaData[jaulaKey] || [];
+  try {
+    issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: `Ruta — ${name} — ${todayISO()}`,
+        body: "",
+        labels: ["ruta", `op-${opSlug}`, `date-${todayISO()}`, `jaula-${slug(jaulaKey)}`],
+      }),
+    });
+    pedidos = rows.map((r) => ({
+      id: newId(),
+      text: r[sheetCol.pedido].trim() + (sheetCol.colonia >= 0 && r[sheetCol.colonia] ? ` — ${r[sheetCol.colonia].trim()}` : ""),
+      done: false,
+    }));
+    showJaulaPicker = false;
+    mode = pedidos.length ? "deliver" : "build";
+    await persistPedidos();
+    render();
+  } catch (err) {
+    renderError("No se pudo crear tu ruta: " + err.message, () => chooseJaula(jaulaKey));
+  }
+}
+
+async function skipJaulaManual() {
+  try {
+    issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: `Ruta — ${name} — ${todayISO()}`,
+        body: "",
+        labels: ["ruta", `op-${opSlug}`, `date-${todayISO()}`],
+      }),
+    });
+    pedidos = []; showJaulaPicker = false; mode = "build";
+    render();
+  } catch (err) {
+    renderError("No se pudo crear tu ruta: " + err.message, skipJaulaManual);
+  }
+}
+
+
 const escapeHtml = (str) => (str ?? "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /* ---------- token: solo en este navegador ---------- */
@@ -161,19 +278,12 @@ async function loadTodayIssue() {
     const list = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=op-${opSlug},date-${todayISO()}&state=all`);
     if (list && list.length) {
       issue = list[0];
+      pedidos = parseBody(issue.body);
+      mode = pedidos.length ? "deliver" : "build";
+      render();
     } else {
-      issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
-        method: "POST",
-        body: JSON.stringify({
-          title: `Ruta — ${name} — ${todayISO()}`,
-          body: "",
-          labels: ["ruta", `op-${opSlug}`, `date-${todayISO()}`],
-        }),
-      });
+      await loadJaulaOptions();
     }
-    pedidos = parseBody(issue.body);
-    mode = pedidos.length ? "deliver" : "build";
-    render();
   } catch (err) {
     renderError("No se pudo cargar tu ruta de hoy: " + err.message, loadTodayIssue);
   }
@@ -364,7 +474,40 @@ async function hydrateAdminPhotos() {
 function render() {
   if (!getToken()) return renderSetup();
   if (!name) return renderNamePrompt();
+  if (currentRole === "operador" && showJaulaPicker) return renderJaulaPicker();
   return currentRole === "operador" ? renderOperator() : renderAdmin();
+}
+
+function renderJaulaPicker() {
+  const right = `<div class="header-right"><button class="icon" id="sign-out" title="Salir">⎋</button></div>`;
+  const keys = Object.keys(jaulaData).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+  let body = "";
+  if (jaulaLoading) {
+    body = `<div class="center small"><div class="spinner"></div></div>`;
+  } else if (!keys.length) {
+    body = `
+      <div class="empty">No encontré pedidos de hoy en la hoja de rutas.</div>
+      <button class="btn-primary" id="skip-manual" style="width:100%;margin-top:12px;padding:13px 0;font-size:15px;">Armar mi ruta a mano</button>
+    `;
+  } else {
+    body = `
+      <div class="hint">Elige la jaula que te asignaron hoy — tu ruta se arma sola con esos pedidos.</div>
+      ${keys.map((k) => `
+        <button class="stop-row clickable" data-jaula="${escapeHtml(k)}">
+          <div class="stop-badge">${escapeHtml(k)}</div>
+          <div style="flex:1;text-align:left;">
+            <div style="font-size:14px;font-weight:600;">Jaula ${escapeHtml(k)}</div>
+            <div class="mono" style="font-size:11.5px;color:#94A3B8;">${jaulaData[k].length} pedido${jaulaData[k].length > 1 ? "s" : ""}</div>
+          </div>
+        </button>`).join("")}
+      <button class="btn-link" id="skip-manual" style="width:100%;margin-top:10px;">Mi jaula no aparece / armar a mano</button>
+    `;
+  }
+  root.innerHTML = `${headerHtml({ title: name, subtitle: "Elige tu jaula", rightHtml: right })}<div class="container">${body}</div>`;
+  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; pushView("name"); render(); };
+  const skip = document.getElementById("skip-manual");
+  if (skip) skip.onclick = skipJaulaManual;
+  root.querySelectorAll("[data-jaula]").forEach((b) => { b.onclick = () => chooseJaula(b.dataset.jaula); });
 }
 
 function renderSetup() {
