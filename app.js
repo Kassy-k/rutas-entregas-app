@@ -66,6 +66,7 @@ async function fetchSheetData() {
 /* ---------- elegir jaula (pedidos automáticos desde Sheets) ---------- */
 let showJaulaPicker = false;
 let jaulaData = {};
+let jaulaTaken = {}; // slug(jaula) -> nombre del operador que ya la tomó hoy
 let sheetCol = {};
 let jaulaLoading = false;
 
@@ -83,6 +84,7 @@ async function loadJaulaOptions() {
       byJaula[j].push(r);
     });
     jaulaData = byJaula;
+    jaulaTaken = await fetchTakenJaulas();
   } catch (err) {
     renderError("No se pudo leer la hoja de rutas: " + err.message, loadJaulaOptions);
     return;
@@ -92,9 +94,30 @@ async function loadJaulaOptions() {
   render();
 }
 
+async function fetchTakenJaulas() {
+  const issues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=all&per_page=100`);
+  const taken = {};
+  issues.forEach((iss) => {
+    const labelNames = (iss.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+    const jaulaLabel = labelNames.find((n) => n.startsWith("jaula-"));
+    if (jaulaLabel) {
+      taken[jaulaLabel.replace(/^jaula-/, "")] = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+    }
+  });
+  return taken;
+}
+
 async function chooseJaula(jaulaKey) {
   const rows = jaulaData[jaulaKey] || [];
   try {
+    // último chequeo justo antes de crear, por si alguien más la tomó apenas ahorita
+    const fresh = await fetchTakenJaulas();
+    if (fresh[slug(jaulaKey)]) {
+      jaulaTaken = fresh;
+      alert(`La jaula ${jaulaKey} ya la tomó ${fresh[slug(jaulaKey)]} hace un momento. Elige otra.`);
+      render();
+      return;
+    }
     issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
       method: "POST",
       body: JSON.stringify({
@@ -551,14 +574,27 @@ function renderJaulaPicker() {
   } else {
     body = `
       <div class="hint">Elige la jaula que te asignaron hoy — tu ruta se arma sola con esos pedidos.</div>
-      ${keys.map((k) => `
-        <button class="stop-row clickable" data-jaula="${escapeHtml(k)}">
-          <div class="stop-badge">${escapeHtml(k)}</div>
-          <div style="flex:1;text-align:left;">
-            <div style="font-size:14px;font-weight:600;">Jaula ${escapeHtml(k)}</div>
-            <div class="mono" style="font-size:11.5px;color:#94A3B8;">${jaulaData[k].length} pedido${jaulaData[k].length > 1 ? "s" : ""}</div>
-          </div>
-        </button>`).join("")}
+      ${keys.map((k) => {
+        const takenBy = jaulaTaken[slug(k)];
+        if (takenBy) {
+          return `
+            <div class="stop-row" style="opacity:0.55;">
+              <div class="stop-badge" style="background:#94A3B8;">${escapeHtml(k)}</div>
+              <div style="flex:1;text-align:left;">
+                <div style="font-size:14px;font-weight:600;">Jaula ${escapeHtml(k)}</div>
+                <div class="mono" style="font-size:11.5px;color:#94A3B8;">🔒 Ya asignada a ${escapeHtml(takenBy)}</div>
+              </div>
+            </div>`;
+        }
+        return `
+          <button class="stop-row clickable" data-jaula="${escapeHtml(k)}">
+            <div class="stop-badge">${escapeHtml(k)}</div>
+            <div style="flex:1;text-align:left;">
+              <div style="font-size:14px;font-weight:600;">Jaula ${escapeHtml(k)}</div>
+              <div class="mono" style="font-size:11.5px;color:#94A3B8;">${jaulaData[k].length} pedido${jaulaData[k].length > 1 ? "s" : ""}</div>
+            </div>
+          </button>`;
+      }).join("")}
       <button class="btn-link" id="skip-manual" style="width:100%;margin-top:10px;">Mi jaula no aparece / armar a mano</button>
     `;
   }
