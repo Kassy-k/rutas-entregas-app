@@ -109,7 +109,7 @@ async function chooseJaula(jaulaKey) {
       done: false,
     }));
     showJaulaPicker = false;
-    mode = pedidos.length ? "deliver" : "build";
+    mode = "build";
     await persistPedidos();
     render();
   } catch (err) {
@@ -279,7 +279,8 @@ async function loadTodayIssue() {
     if (list && list.length) {
       issue = list[0];
       pedidos = parseBody(issue.body);
-      mode = pedidos.length ? "deliver" : "build";
+      const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+      mode = labelNames.includes("confirmada") ? "deliver" : "build";
       render();
     } else {
       await loadJaulaOptions();
@@ -322,11 +323,20 @@ function movePedido(i, dir) {
     addComment(`↕️ ${name} cambió el orden de su ruta`);
   }
 }
-function startDeliveries() {
+async function startDeliveries() {
   if (!pedidos.length) return;
   mode = "deliver";
   persistPedidos();
   render();
+  try {
+    const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+    if (!labelNames.includes("confirmada")) {
+      issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`, {
+        method: "PATCH", body: JSON.stringify({ labels: [...labelNames, "confirmada"] }),
+      });
+      addComment(`✅ ${name} confirmó su ruta (${pedidos.length} pedidos)`);
+    }
+  } catch { /* no bloquear al operador si esto falla, ya está en modo entrega de cualquier forma */ }
 }
 
 let pendingPhotos = {}; // pedidoId -> [{file, previewUrl}]
@@ -418,7 +428,7 @@ async function loadActivity() {
       const comments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments?per_page=50`);
       const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
       comments.forEach((c) => {
-        if (c.body.startsWith("📦") || c.body.startsWith("↕️") || c.body.startsWith("➕")) {
+        if (c.body.startsWith("📦") || c.body.startsWith("↕️") || c.body.startsWith("➕") || c.body.startsWith("✅")) {
           all.push({ id: c.id, message: c.body.split("\n")[0], created_at: c.created_at });
         }
       });
@@ -640,7 +650,7 @@ function renderOperator() {
           <button class="btn-icon" data-move="${i}:1" ${i === pedidos.length - 1 ? "disabled" : ""}>↓</button>
           <button class="btn-icon" style="color:var(--danger)" data-remove="${i}">✕</button>
         </div>`).join("")}
-      ${pedidos.length ? `<button class="btn-primary" id="start-route" style="width:100%;margin-top:18px;padding:13px 0;font-size:15px;">Iniciar ruta (${pedidos.length} pedidos)</button>` : ""}
+      ${pedidos.length ? `<button class="btn-primary" id="start-route" style="width:100%;margin-top:18px;padding:13px 0;font-size:15px;">✅ Confirmar ruta (${pedidos.length} pedidos)</button>` : ""}
     `;
   } else {
     const pct = pedidos.length ? Math.round((delivered / pedidos.length) * 100) : 0;
@@ -730,12 +740,18 @@ function renderAdmin() {
     const done = list.filter((p) => p.done).length;
     const unseen = Math.max(0, done - (seenCounts[iss.number] || 0));
     const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+    const isConfirmed = (iss.labels || []).some((l) => (typeof l === "string" ? l : l.name) === "confirmada");
     return `
       <button class="stop-row clickable" data-open="${iss.number}" style="position:relative;">
         ${unseen > 0 ? `<div class="route-count-badge">${unseen}</div>` : ""}
         <div class="stop-badge ${done === list.length && list.length > 0 ? "done" : ""}">👤</div>
         <div style="flex:1;text-align:left;">
-          <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
+            ${isConfirmed
+              ? `<span style="font-size:10px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:5px;padding:1px 6px;">✅ Confirmada</span>`
+              : `<span style="font-size:10px;font-weight:700;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:5px;padding:1px 6px;">⏳ Acomodando</span>`}
+          </div>
           <div class="mono" style="font-size:11.5px;color:#94A3B8;">${done}/${list.length} finalizados</div>
         </div>
       </button>`;
@@ -763,8 +779,8 @@ function renderActivity() {
     <div class="container">
       ${!activityFeed.length ? `<div class="empty">Aún no hay actividad registrada hoy.</div>` : activityFeed.map((e) => `
         <div class="stop-row" style="align-items:flex-start;">
-          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : e.message.startsWith("➕") ? "#2563EB" : "var(--amber)"};">
-            ${e.message.startsWith("📦") ? "📷" : e.message.startsWith("➕") ? "➕" : "↕"}
+          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : e.message.startsWith("➕") ? "#2563EB" : e.message.startsWith("✅") ? "#16A34A" : "var(--amber)"};">
+            ${e.message.startsWith("📦") ? "📷" : e.message.startsWith("➕") ? "➕" : e.message.startsWith("✅") ? "✅" : "↕"}
           </div>
           <div style="flex:1;">
             <div style="font-size:13.5px;">${escapeHtml(e.message)}</div>
