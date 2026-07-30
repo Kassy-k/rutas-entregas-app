@@ -393,7 +393,7 @@ function stopAdminPolling() {
 async function silentRefreshAdmin() {
   if (currentRole !== "admin" || adminSelected || showActivity) return;
   try {
-    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=all&per_page=100`);
+    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=open&per_page=100`);
     await loadActivity();
     if (currentRole === "admin" && !adminSelected && !showActivity) render();
   } catch { /* falla silenciosa: no interrumpir al admin con errores de fondo */ }
@@ -401,7 +401,7 @@ async function silentRefreshAdmin() {
 
 async function loadAdmin() {
   try {
-    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=all&per_page=100`);
+    adminIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=open&per_page=100`);
     render();
     await loadActivity();
     render();
@@ -449,6 +449,21 @@ async function openAdminIssue(iss) {
     hydrateAdminPhotos();
   } catch (err) {
     renderError("No se pudo abrir esta ruta: " + err.message, () => openAdminIssue(iss));
+  }
+}
+
+async function archiveRoute(iss) {
+  const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+  if (!confirm(`¿Archivar la ruta de ${opName}? Se oculta del panel, pero la evidencia y el historial quedan a salvo — la puedes volver a ver en cualquier momento directo en GitHub.`)) return;
+  try {
+    await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
+      method: "PATCH", body: JSON.stringify({ state: "closed" }),
+    });
+    adminSelected = null;
+    pushView("admin-list");
+    await loadAdmin();
+  } catch (err) {
+    alert("No se pudo archivar la ruta: " + err.message);
   }
 }
 async function hydrateAdminPhotos() {
@@ -792,9 +807,11 @@ function renderAdminDetail() {
             </div>
           </div>`;
       }).join("")}
+      <button class="btn-link" id="archive-btn" style="width:100%;margin-top:22px;color:var(--danger);">🗄️ Archivar esta ruta</button>
     </div>`;
 
   document.getElementById("back-btn").onclick = () => history.back();
+  document.getElementById("archive-btn").onclick = () => archiveRoute(adminSelected);
   hydrateAdminPhotos();
 }
 
