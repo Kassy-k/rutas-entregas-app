@@ -210,20 +210,23 @@ function applyPopState(state) {
       break;
     case "name":
       name = ""; issue = null; pedidos = []; mode = "build";
-      adminSelected = null; showActivity = false; showJaulaPicker = false;
+      adminSelected = null; showActivity = false; showJaulaPicker = false; showArchived = false;
       break;
     case "operator":
-      currentRole = "operador"; adminSelected = null; showActivity = false;
+      currentRole = "operador"; adminSelected = null; showActivity = false; showArchived = false;
       break;
     case "admin-list":
-      currentRole = "admin"; adminSelected = null; showActivity = false;
+      currentRole = "admin"; adminSelected = null; showActivity = false; showArchived = false;
       break;
     case "admin-detail":
-      currentRole = "admin"; showActivity = false;
+      currentRole = "admin"; showActivity = false; showArchived = false;
       adminSelected = s.issue; adminSelectedPedidos = s.pedidos; adminSelectedComments = s.comments;
       break;
     case "activity":
-      currentRole = "admin"; showActivity = true; adminSelected = null;
+      currentRole = "admin"; showActivity = true; showArchived = false; adminSelected = null;
+      break;
+    case "archived":
+      currentRole = "admin"; showArchived = true; showActivity = false; adminSelected = null;
       break;
   }
 }
@@ -247,6 +250,9 @@ let adminSelectedPedidos = [];
 let activityFeed = [];
 let unreadCount = 0;
 let showActivity = false;
+let showArchived = false;
+let archivedIssues = [];
+let archivedLoading = false;
 
 /* ---------- visor de fotos en grande ---------- */
 function showLightbox(src) {
@@ -441,6 +447,31 @@ async function loadActivity() {
   unreadCount = activityFeed.filter((e) => new Date(e.created_at).getTime() > lastSeen).length;
 }
 
+async function loadArchived() {
+  archivedLoading = true; showArchived = true; pushView("archived"); render();
+  try {
+    archivedIssues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${adminDate}&state=closed&per_page=100`);
+  } catch (err) {
+    archivedIssues = [];
+  } finally {
+    archivedLoading = false;
+  }
+  render();
+}
+
+async function unarchiveRoute(iss) {
+  try {
+    await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
+      method: "PATCH", body: JSON.stringify({ state: "open" }),
+    });
+    archivedIssues = archivedIssues.filter((i) => i.number !== iss.number);
+    render();
+    await loadAdmin();
+  } catch (err) {
+    alert("No se pudo desarchivar la ruta: " + err.message);
+  }
+}
+
 function openActivityScreen() {
   showActivity = true;
   try { localStorage.setItem("rutas_admin_last_seen", String(Date.now())); } catch { /* ignorar */ }
@@ -529,7 +560,7 @@ function renderJaulaPicker() {
     `;
   }
   root.innerHTML = `${headerHtml({ title: name, subtitle: "Elige tu jaula", rightHtml: right })}<div class="container">${body}</div>`;
-  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; showArchived = false; pushView("name"); render(); };
   const skip = document.getElementById("skip-manual");
   if (skip) skip.onclick = skipJaulaManual;
   root.querySelectorAll("[data-jaula]").forEach((b) => { b.onclick = () => chooseJaula(b.dataset.jaula); });
@@ -613,7 +644,7 @@ function renderError(message, retryFn) {
     </div>`;
   document.getElementById("retry-btn").onclick = retryFn;
   document.getElementById("back-to-name").onclick = () => {
-    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false; showJaulaPicker = false;
+    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false; showJaulaPicker = false; showArchived = false;
     pushView("name"); render();
   };
 }
@@ -707,7 +738,7 @@ function renderOperator() {
 }
 
 function bindOperatorEvents() {
-  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; showJaulaPicker = false; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; showJaulaPicker = false; showArchived = false; pushView("name"); render(); };
   const addBtn = document.getElementById("add-pedido");
   if (addBtn) addBtn.onclick = () => { const inp = document.getElementById("pedido-input"); addPedido(inp.value); inp.value = ""; };
   const inp = document.getElementById("pedido-input");
@@ -729,6 +760,7 @@ function bindOperatorEvents() {
 function renderAdmin() {
   if (adminSelected) return renderAdminDetail();
   if (showActivity) return renderActivity();
+  if (showArchived) return renderArchived();
   const right = `<div class="header-right">
     <button class="icon" id="bell-btn" style="position:relative;">🔔${unreadCount > 0 ? `<span class="badge-dot">${unreadCount}</span>` : ""}</button>
     <button class="icon" id="refresh-btn">⟳</button>
@@ -764,13 +796,43 @@ function renderAdmin() {
         <input type="date" id="admin-date" value="${adminDate}" max="${todayISO()}" style="flex:1;" />
       </div>
       ${!adminIssues.length ? `<div class="empty">Ningún operador registró ruta este día.</div>` : rows}
+      <button class="btn-link" id="view-archived" style="width:100%;margin-top:14px;">🗄️ Ver rutas archivadas de este día</button>
     </div>`;
 
   document.getElementById("admin-date").onchange = (e) => { adminDate = e.target.value; loadAdmin(); };
   document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
-  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; stopAdminPolling(); pushView("name"); render(); };
+  document.getElementById("view-archived").onclick = loadArchived;
+  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; showArchived = false; stopAdminPolling(); pushView("name"); render(); };
   root.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => openAdminIssue(adminIssues.find((i) => String(i.number) === b.dataset.open)); });
+}
+
+function renderArchived() {
+  const rows = archivedIssues.map((iss) => {
+    const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+    const list = parseBody(iss.body);
+    const done = list.filter((p) => p.done).length;
+    return `
+      <div class="stop-row">
+        <div class="stop-badge">👤</div>
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
+          <div class="mono" style="font-size:11.5px;color:#94A3B8;">${done}/${list.length} finalizados</div>
+        </div>
+        <button class="btn-secondary" data-unarchive="${iss.number}">↩️ Desarchivar</button>
+      </div>`;
+  }).join("");
+
+  root.innerHTML = `
+    ${headerHtml({ title: "Rutas archivadas", subtitle: adminDate === todayISO() ? "Hoy" : adminDate, back: true })}
+    <div class="container">
+      ${archivedLoading ? `<div class="center small"><div class="spinner"></div></div>` : (!archivedIssues.length ? `<div class="empty">No hay rutas archivadas este día.</div>` : rows)}
+    </div>`;
+
+  document.getElementById("back-btn").onclick = () => history.back();
+  root.querySelectorAll("[data-unarchive]").forEach((b) => {
+    b.onclick = () => unarchiveRoute(archivedIssues.find((i) => String(i.number) === b.dataset.unarchive));
+  });
 }
 
 function renderActivity() {
