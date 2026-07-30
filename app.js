@@ -46,8 +46,8 @@ function matchesToday(fechaRaw) {
   const d = new Date();
   const day = String(d.getDate());
   const month = MESES_ES[d.getMonth()];
-  const norm = normalize(fechaRaw);
-  return norm.includes(day) && norm.includes(month);
+  const parts = normalize(fechaRaw).split(/[^a-z0-9]+/).filter(Boolean);
+  return parts.includes(day) && parts.includes(month);
 }
 
 async function fetchSheetData() {
@@ -210,7 +210,7 @@ function applyPopState(state) {
       break;
     case "name":
       name = ""; issue = null; pedidos = []; mode = "build";
-      adminSelected = null; showActivity = false;
+      adminSelected = null; showActivity = false; showJaulaPicker = false;
       break;
     case "operator":
       currentRole = "operador"; adminSelected = null; showActivity = false;
@@ -613,7 +613,7 @@ function renderError(message, retryFn) {
     </div>`;
   document.getElementById("retry-btn").onclick = retryFn;
   document.getElementById("back-to-name").onclick = () => {
-    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false;
+    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false; showJaulaPicker = false;
     pushView("name"); render();
   };
 }
@@ -707,7 +707,7 @@ function renderOperator() {
 }
 
 function bindOperatorEvents() {
-  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; showJaulaPicker = false; pushView("name"); render(); };
   const addBtn = document.getElementById("add-pedido");
   if (addBtn) addBtn.onclick = () => { const inp = document.getElementById("pedido-input"); addPedido(inp.value); inp.value = ""; };
   const inp = document.getElementById("pedido-input");
@@ -769,7 +769,7 @@ function renderAdmin() {
   document.getElementById("admin-date").onchange = (e) => { adminDate = e.target.value; loadAdmin(); };
   document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
-  document.getElementById("sign-out").onclick = () => { name = ""; stopAdminPolling(); pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; stopAdminPolling(); pushView("name"); render(); };
   root.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => openAdminIssue(adminIssues.find((i) => String(i.number) === b.dataset.open)); });
 }
 
