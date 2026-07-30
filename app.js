@@ -298,10 +298,13 @@ async function loadTodayIssue() {
 
 async function persistPedidos() {
   saving = true; render();
-  await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`, {
-    method: "PATCH", body: JSON.stringify({ body: buildBody(pedidos) }),
-  });
-  saving = false; render();
+  try {
+    await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`, {
+      method: "PATCH", body: JSON.stringify({ body: buildBody(pedidos) }),
+    });
+  } finally {
+    saving = false; render();
+  }
 }
 async function addComment(message) {
   await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}/comments`, {
@@ -314,8 +317,8 @@ function addPedido(text) {
   pedidos.push({ id: newId(), text: text.trim(), done: false });
   render();
   if (mode === "deliver") {
-    persistPedidos();
-    addComment(`➕ ${name} agregó un nuevo pedido a su ruta: ${text.trim()}`);
+    persistPedidos().catch(() => { /* se reintenta solo la próxima vez que se guarde algo */ });
+    addComment(`➕ ${name} agregó un nuevo pedido a su ruta: ${text.trim()}`).catch(() => {});
   }
 }
 function removePedido(i) { pedidos.splice(i, 1); render(); }
@@ -325,14 +328,14 @@ function movePedido(i, dir) {
   [pedidos[i], pedidos[j]] = [pedidos[j], pedidos[i]];
   render();
   if (mode === "deliver") {
-    persistPedidos();
-    addComment(`↕️ ${name} cambió el orden de su ruta`);
+    persistPedidos().catch(() => {});
+    addComment(`↕️ ${name} cambió el orden de su ruta`).catch(() => {});
   }
 }
 async function startDeliveries() {
   if (!pedidos.length) return;
   mode = "deliver";
-  persistPedidos();
+  persistPedidos().catch(() => {});
   render();
   try {
     const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
@@ -340,7 +343,7 @@ async function startDeliveries() {
       issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`, {
         method: "PATCH", body: JSON.stringify({ labels: [...labelNames, "confirmada"] }),
       });
-      addComment(`✅ ${name} confirmó su ruta (${pedidos.length} pedidos)`);
+      addComment(`✅ ${name} confirmó su ruta (${pedidos.length} pedidos)`).catch(() => {});
     }
   } catch { /* no bloquear al operador si esto falla, ya está en modo entrega de cualquier forma */ }
 }
