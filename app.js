@@ -130,6 +130,7 @@ async function chooseJaula(jaulaKey) {
       id: newId(),
       text: r[sheetCol.pedido].trim() + (sheetCol.colonia >= 0 && r[sheetCol.colonia] ? ` — ${r[sheetCol.colonia].trim()}` : ""),
       done: false,
+      resultado: "exitoso",
     }));
     showJaulaPicker = false;
     mode = "build";
@@ -309,14 +310,30 @@ function showLightbox(src) {
   lb.onclick = (e) => { if (e.target === lb || e.target.id === "lightbox-close") lb.style.display = "none"; };
 }
 
+/* ---------- estatus de cada pedido ---------- */
+const STATUS_OPTIONS = [
+  { value: "exitoso", label: "✅ Exitoso", color: "#166534", bg: "#F0FDF4", border: "#BBF7D0" },
+  { value: "rechazado", label: "❌ Rechazado", color: "#991B1B", bg: "#FEF2F2", border: "#FECACA" },
+  { value: "reprogramado", label: "🔁 Reprogramado", color: "#92400E", bg: "#FFFBEB", border: "#FDE68A" },
+  { value: "no-entregado", label: "🚫 No entregado", color: "#334155", bg: "#F1F5F9", border: "#CBD5E1" },
+];
+function statusMeta(value) { return STATUS_OPTIONS.find((s) => s.value === value) || STATUS_OPTIONS[0]; }
+
 /* ---------- parseo del checklist en el body del issue ---------- */
 function newId() { return `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`; }
 function parseBody(body) {
   return (body || "").split("\n").filter((l) => l.trim().startsWith("- ["))
-    .map((l) => ({ id: newId(), done: /^- \[x\]/i.test(l.trim()), text: l.replace(/^- \[[ xX]\]\s*/, "").trim() }));
+    .map((l) => {
+      const done = /^- \[x\]/i.test(l.trim());
+      let text = l.replace(/^- \[[ xX]\]\s*/, "").trim();
+      let resultado = "exitoso";
+      const m = text.match(/\s*\{resultado:([a-z-]+)\}\s*$/i);
+      if (m) { resultado = m[1]; text = text.slice(0, m.index).trim(); }
+      return { id: newId(), done, text, resultado };
+    });
 }
 function buildBody(list) {
-  return list.map((p) => `- [${p.done ? "x" : " "}] ${p.text}`).join("\n");
+  return list.map((p) => `- [${p.done ? "x" : " "}] ${p.text} {resultado:${p.resultado || "exitoso"}}`).join("\n");
 }
 
 /* ---------- operador: cargar/crear el issue de hoy ---------- */
@@ -355,7 +372,7 @@ async function addComment(message) {
 
 function addPedido(text) {
   if (!text.trim()) return;
-  pedidos.push({ id: newId(), text: text.trim(), done: false });
+  pedidos.push({ id: newId(), text: text.trim(), done: false, resultado: "exitoso" });
   render();
   if (mode === "deliver") {
     persistPedidos().catch(() => { /* se reintenta solo la próxima vez que se guarde algo */ });
@@ -430,7 +447,8 @@ async function finalizarPedido(pedidoId) {
     pedido.done = true;
     await persistPedidos();
     const time = timeLabel(new Date().toISOString());
-    await addComment(`📦 ${pedido.text} — finalizado ${time}\nFotos: ${paths.join(", ")}`);
+    const meta = statusMeta(pedido.resultado);
+    await addComment(`📦 ${pedido.text} — ${meta.label} — finalizado ${time}\nFotos: ${paths.join(", ")}`);
     delete pendingPhotos[pedidoId];
     render();
   } catch (err) {
@@ -775,9 +793,10 @@ function renderOperator() {
       <div class="hint">↕ Puedes reordenar tus pedidos pendientes cuando haga falta.</div>
       ${pedidos.map((p, i) => {
         const staged = pendingPhotos[p.id] || [];
+        const meta = statusMeta(p.resultado);
         return `
         <div class="stop-row deliver">
-          ${p.done ? `<div class="stamp">FINALIZADO</div>` : ""}
+          ${p.done ? `<div class="stamp" style="border-color:${meta.color};color:${meta.color};">${meta.label.toUpperCase()}</div>` : ""}
           <div style="display:flex;align-items:center;gap:10px;width:100%;">
             <div class="stop-badge ${p.done ? "done" : ""}">${i + 1}</div>
             <div class="stop-address">${escapeHtml(p.text)}</div>
@@ -785,7 +804,10 @@ function renderOperator() {
               <button class="btn-icon" data-move="${i}:-1" ${i === 0 ? "disabled" : ""}>↑</button>
               <button class="btn-icon" data-move="${i}:1" ${i === pedidos.length - 1 ? "disabled" : ""}>↓</button>` : ""}
           </div>
-          ${p.done ? `<div class="mono" style="font-size:12px;color:var(--route);">✓ finalizado</div>` : `
+          ${p.done ? `<div class="mono" style="font-size:12px;font-weight:700;color:${meta.color};background:${meta.bg};border:1px solid ${meta.border};border-radius:6px;padding:3px 8px;">${meta.label}</div>` : `
+            <select data-status="${p.id}" style="border:1px solid ${meta.border};background:${meta.bg};color:${meta.color};border-radius:7px;padding:7px 8px;font-size:12.5px;font-weight:600;width:100%;">
+              ${STATUS_OPTIONS.map((o) => `<option value="${o.value}" ${p.resultado === o.value ? "selected" : ""}>${o.label}</option>`).join("")}
+            </select>
             ${staged.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
               ${staged.map((s, sIdx) => `
                 <div style="position:relative;">
@@ -836,6 +858,13 @@ function bindOperatorEvents() {
   root.querySelectorAll("[data-move]").forEach((b) => { b.onclick = () => { const [i, d] = b.dataset.move.split(":"); movePedido(Number(i), Number(d)); }; });
   root.querySelectorAll("[data-remove]").forEach((b) => { b.onclick = () => removePedido(Number(b.dataset.remove)); });
   root.querySelectorAll("[data-addphoto]").forEach((b) => { b.onclick = () => openCamera(b.dataset.addphoto); });
+  root.querySelectorAll("[data-status]").forEach((sel) => {
+    sel.onchange = (e) => {
+      const pedido = pedidos.find((p) => p.id === sel.dataset.status);
+      if (pedido) pedido.resultado = e.target.value;
+      render();
+    };
+  });
   root.querySelectorAll("[data-remove-photo]").forEach((b) => { b.onclick = () => { const [pid, idx] = b.dataset.removePhoto.split(":"); removePendingPhoto(pid, Number(idx)); }; });
   root.querySelectorAll("[data-finalize]").forEach((b) => { b.onclick = () => finalizarPedido(b.dataset.finalize); });
   document.getElementById("photo-input").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
@@ -951,11 +980,15 @@ function renderAdminDetail() {
         <div class="progress-labels"><span class="mono">${done}/${total} finalizados</span><span class="mono">${pct}%</span></div>
         <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
       </div>
-      ${adminSelectedPedidos.map((p, i) => `
+      ${adminSelectedPedidos.map((p, i) => {
+        const meta = statusMeta(p.resultado);
+        return `
         <div class="stop-row">
           <div class="stop-badge ${p.done ? "done" : ""}">${i + 1}</div>
           <div class="stop-address">${escapeHtml(p.text)}</div>
-        </div>`).join("")}
+          ${p.done ? `<div class="mono" style="font-size:11px;font-weight:700;color:${meta.color};background:${meta.bg};border:1px solid ${meta.border};border-radius:6px;padding:2px 7px;flex-shrink:0;">${meta.label}</div>` : ""}
+        </div>`;
+      }).join("")}
       <div style="margin:18px 0 8px;font-size:12.5px;font-weight:700;color:#64748B;">EVIDENCIA</div>
       ${!evidenceComments.length ? `<div class="empty">Aún sin evidencia.</div>` : evidenceComments.map((c) => {
         const m = c.body.match(/Fotos:\s*(.+)/);
