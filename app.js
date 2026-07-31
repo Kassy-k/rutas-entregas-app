@@ -392,6 +392,16 @@ function movePedido(i, dir) {
 }
 async function startDeliveries() {
   if (!pedidos.length) return;
+  try {
+    const fresh = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`);
+    if (fresh.state === "closed") {
+      alert("Tu administrador archivó esta ruta (por ejemplo, para liberar la jaula). Vamos a llevarte a elegir de nuevo.");
+      issue = null; pedidos = []; mode = "build";
+      await loadJaulaOptions();
+      return;
+    }
+    issue = fresh;
+  } catch { /* si falla la verificación, seguimos con lo que ya teníamos en memoria */ }
   mode = "deliver";
   persistPedidos().catch(() => {});
   render();
