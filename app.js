@@ -561,14 +561,16 @@ async function releaseJaula(iss) {
   const jaulaLabel = issueJaulaLabel(iss);
   if (!jaulaLabel) { alert("Esta ruta no tiene ninguna jaula asignada."); return; }
   const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
-  if (!confirm(`¿Liberar la jaula de ${opName}? La ruta se queda igual (no se archiva), pero otro operador podrá elegir esa jaula.`)) return;
+  if (!confirm(`¿Liberar la jaula de ${opName}? Otro operador podrá elegirla, y esta ruta se oculta de tu panel (queda a salvo en el historial de GitHub por si la necesitas).`)) return;
   try {
     const labelNames = (iss.labels || []).map((l) => (typeof l === "string" ? l : l.name));
-    const updated = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
-      method: "PATCH", body: JSON.stringify({ labels: labelNames.filter((n) => n !== jaulaLabel) }),
+    await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
+      method: "PATCH",
+      body: JSON.stringify({ labels: labelNames.filter((n) => n !== jaulaLabel), state: "closed" }),
     });
-    adminSelected = updated;
-    render();
+    adminSelected = null;
+    pushView("admin-list");
+    await loadAdmin();
   } catch (err) {
     alert("No se pudo liberar la jaula: " + err.message);
   }
