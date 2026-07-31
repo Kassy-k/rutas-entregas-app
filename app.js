@@ -95,7 +95,7 @@ async function loadJaulaOptions() {
 }
 
 async function fetchTakenJaulas() {
-  const issues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=all&per_page=100`);
+  const issues = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=ruta,date-${todayISO()}&state=open&per_page=100`);
   const taken = {};
   issues.forEach((iss) => {
     const labelNames = (iss.labels || []).map((l) => (typeof l === "string" ? l : l.name));
@@ -137,6 +137,24 @@ async function chooseJaula(jaulaKey) {
     render();
   } catch (err) {
     renderError("No se pudo crear tu ruta: " + err.message, () => chooseJaula(jaulaKey));
+  }
+}
+
+function currentJaulaLabel() {
+  const labelNames = (issue?.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+  return labelNames.find((n) => n.startsWith("jaula-"));
+}
+
+async function restartJaulaChoice() {
+  if (!confirm("¿Elegiste la jaula equivocada? Esto archiva esta ruta (no se pierde nada, queda en el historial) y te deja elegir la jaula correcta.")) return;
+  try {
+    await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`, {
+      method: "PATCH", body: JSON.stringify({ state: "closed" }),
+    });
+    issue = null; pedidos = []; mode = "build";
+    await loadJaulaOptions();
+  } catch (err) {
+    alert("No se pudo reiniciar: " + err.message);
   }
 }
 
@@ -533,6 +551,28 @@ async function archiveRoute(iss) {
     alert("No se pudo archivar la ruta: " + err.message);
   }
 }
+
+function issueJaulaLabel(iss) {
+  const labelNames = (iss?.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+  return labelNames.find((n) => n.startsWith("jaula-"));
+}
+
+async function releaseJaula(iss) {
+  const jaulaLabel = issueJaulaLabel(iss);
+  if (!jaulaLabel) { alert("Esta ruta no tiene ninguna jaula asignada."); return; }
+  const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+  if (!confirm(`¿Liberar la jaula de ${opName}? La ruta se queda igual (no se archiva), pero otro operador podrá elegir esa jaula.`)) return;
+  try {
+    const labelNames = (iss.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+    const updated = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
+      method: "PATCH", body: JSON.stringify({ labels: labelNames.filter((n) => n !== jaulaLabel) }),
+    });
+    adminSelected = updated;
+    render();
+  } catch (err) {
+    alert("No se pudo liberar la jaula: " + err.message);
+  }
+}
 async function hydrateAdminPhotos() {
   for (const c of adminSelectedComments) {
     const m = c.body.match(/Fotos:\s*(.+)/);
@@ -721,6 +761,7 @@ function renderOperator() {
           <button class="btn-icon" style="color:var(--danger)" data-remove="${i}">✕</button>
         </div>`).join("")}
       ${pedidos.length ? `<button class="btn-primary" id="start-route" style="width:100%;margin-top:18px;padding:13px 0;font-size:15px;">✅ Confirmar ruta (${pedidos.length} pedidos)</button>` : ""}
+      ${currentJaulaLabel() ? `<button class="btn-link" id="restart-jaula" style="width:100%;margin-top:10px;color:var(--danger);">¿Elegiste la jaula equivocada? Reiniciar</button>` : ""}
     `;
   } else {
     const pct = pedidos.length ? Math.round((delivered / pedidos.length) * 100) : 0;
@@ -788,6 +829,8 @@ function bindOperatorEvents() {
   if (extraInp) extraInp.addEventListener("keydown", (e) => { if (e.key === "Enter") { addPedido(extraInp.value); extraInp.value = ""; } });
   const startBtn = document.getElementById("start-route");
   if (startBtn) startBtn.onclick = startDeliveries;
+  const restartBtn = document.getElementById("restart-jaula");
+  if (restartBtn) restartBtn.onclick = restartJaulaChoice;
   root.querySelectorAll("[data-move]").forEach((b) => { b.onclick = () => { const [i, d] = b.dataset.move.split(":"); movePedido(Number(i), Number(d)); }; });
   root.querySelectorAll("[data-remove]").forEach((b) => { b.onclick = () => removePedido(Number(b.dataset.remove)); });
   root.querySelectorAll("[data-addphoto]").forEach((b) => { b.onclick = () => openCamera(b.dataset.addphoto); });
@@ -924,11 +967,14 @@ function renderAdminDetail() {
             </div>
           </div>`;
       }).join("")}
-      <button class="btn-link" id="archive-btn" style="width:100%;margin-top:22px;color:var(--danger);">🗄️ Archivar esta ruta</button>
+      ${issueJaulaLabel(adminSelected) ? `<button class="btn-link" id="release-jaula-btn" style="width:100%;margin-top:22px;color:#B45309;">🔓 Liberar jaula asignada</button>` : ""}
+      <button class="btn-link" id="archive-btn" style="width:100%;margin-top:10px;color:var(--danger);">🗄️ Archivar esta ruta</button>
     </div>`;
 
   document.getElementById("back-btn").onclick = () => history.back();
   document.getElementById("archive-btn").onclick = () => archiveRoute(adminSelected);
+  const releaseBtn = document.getElementById("release-jaula-btn");
+  if (releaseBtn) releaseBtn.onclick = () => releaseJaula(adminSelected);
   hydrateAdminPhotos();
 }
 
