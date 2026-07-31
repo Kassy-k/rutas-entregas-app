@@ -280,7 +280,7 @@ function applyPopState(state) {
       break;
     case "name":
       name = ""; issue = null; pedidos = []; mode = "build";
-      adminSelected = null; showActivity = false; showJaulaPicker = false; showArchived = false;
+      adminSelected = null; showActivity = false; showJaulaPicker = false; showArchived = false; routeLocked = false;
       break;
     case "operator":
       currentRole = "operador"; adminSelected = null; showActivity = false; showArchived = false;
@@ -372,6 +372,7 @@ async function loadTodayIssue() {
       issue = list[0];
       pedidos = parseBody(issue.body);
       const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+      routeLocked = labelNames.includes("finalizada");
       mode = labelNames.includes("confirmada") ? "deliver" : "build";
       render();
     } else {
@@ -418,6 +419,28 @@ function movePedido(i, dir) {
     addComment(`↕️ ${name} cambió el orden de su ruta`).catch(() => {});
   }
 }
+let routeLocked = false;
+
+function deliveredCount() { return pedidos.filter((p) => p.done).length; }
+
+async function finalizarRuta() {
+  if (deliveredCount() !== pedidos.length || !pedidos.length) return;
+  if (!confirm("¿Finalizar tu ruta de hoy? Ya no vas a poder hacer cambios, y nadie más va a poder entrar con tu nombre hoy — solo tu administrador puede reabrirla si hace falta.")) return;
+  try {
+    const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+    if (!labelNames.includes("finalizada")) {
+      issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issue.number}`, {
+        method: "PATCH", body: JSON.stringify({ labels: [...labelNames, "finalizada"] }),
+      });
+    }
+    addComment(`🏁 ${name} finalizó su ruta del día`).catch(() => {});
+    routeLocked = true;
+    render();
+  } catch (err) {
+    alert("No se pudo finalizar la ruta: " + err.message);
+  }
+}
+
 async function startDeliveries() {
   if (!pedidos.length) return;
   try {
@@ -447,7 +470,10 @@ async function startDeliveries() {
 let pendingPhotos = {}; // pedidoId -> [{file, previewUrl}]
 let pendingCameraTarget = null;
 
-function openCamera(pedidoId) { pendingCameraTarget = pedidoId; document.getElementById("photo-input").click(); }
+function openPhotoPicker(pedidoId, source) {
+  pendingCameraTarget = pedidoId;
+  document.getElementById(source === "camera" ? "photo-input-camera" : "photo-input-gallery").click();
+}
 
 function onPhotosChosen(files) {
   if (!files.length || !pendingCameraTarget) return;
@@ -613,6 +639,21 @@ function issueJaulaLabel(iss) {
   return labelNames.find((n) => n.startsWith("jaula-"));
 }
 
+async function reopenFinishedRoute(iss) {
+  const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
+  if (!confirm(`¿Reabrir la ruta de ${opName}? Va a poder volver a entrar con su nombre y hacer cambios.`)) return;
+  try {
+    const labelNames = (iss.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+    const updated = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
+      method: "PATCH", body: JSON.stringify({ labels: labelNames.filter((n) => n !== "finalizada") }),
+    });
+    adminSelected = updated;
+    render();
+  } catch (err) {
+    alert("No se pudo reabrir la ruta: " + err.message);
+  }
+}
+
 async function releaseJaula(iss) {
   const jaulaLabel = issueJaulaLabel(iss);
   if (!jaulaLabel) { alert("Esta ruta no tiene ninguna jaula asignada."); return; }
@@ -655,7 +696,21 @@ function render() {
   if (!getToken()) return renderSetup();
   if (!name) return renderNamePrompt();
   if (currentRole === "operador" && showJaulaPicker) return renderJaulaPicker();
+  if (currentRole === "operador" && routeLocked) return renderRouteLocked();
   return currentRole === "operador" ? renderOperator() : renderAdmin();
+}
+
+function renderRouteLocked() {
+  const delivered = pedidos.filter((p) => p.done).length;
+  root.innerHTML = `
+    ${headerHtml({ title: name, subtitle: "Ruta finalizada", rightHtml: `<button class="icon" id="sign-out">⎋</button>` })}
+    <div class="landing">
+      <div style="font-size:40px;">🏁</div>
+      <div class="brand-name" style="text-align:center;">Ruta finalizada</div>
+      <div class="brand-sub" style="text-align:center;">${delivered}/${pedidos.length} pedidos entregados hoy. Buen trabajo.</div>
+      <div class="chip">Si necesitas hacer algún cambio, pídele a tu administrador que reabra tu ruta.</div>
+    </div>`;
+  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; routeLocked = false; pushView("name"); render(); };
 }
 
 function renderJaulaPicker() {
@@ -697,7 +752,7 @@ function renderJaulaPicker() {
     `;
   }
   root.innerHTML = `${headerHtml({ title: name, subtitle: "Elige tu jaula", rightHtml: right })}<div class="container">${body}</div>`;
-  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; showArchived = false; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; showArchived = false; routeLocked = false; pushView("name"); render(); };
   const skip = document.getElementById("skip-manual");
   if (skip) skip.onclick = skipJaulaManual;
   root.querySelectorAll("[data-jaula]").forEach((b) => { b.onclick = () => chooseJaula(b.dataset.jaula); });
@@ -781,7 +836,7 @@ function renderError(message, retryFn) {
     </div>`;
   document.getElementById("retry-btn").onclick = retryFn;
   document.getElementById("back-to-name").onclick = () => {
-    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false; showJaulaPicker = false; showArchived = false;
+    name = ""; issue = null; pedidos = []; adminSelected = null; showActivity = false; showJaulaPicker = false; showArchived = false; routeLocked = false;
     pushView("name"); render();
   };
 }
@@ -854,7 +909,8 @@ function renderOperator() {
                 </div>`).join("")}
             </div>` : ""}
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button class="btn-secondary" data-addphoto="${p.id}">📷 Agregar foto</button>
+              <button class="btn-secondary" data-camera="${p.id}">📷 Cámara</button>
+              <button class="btn-secondary" data-gallery="${p.id}">🖼️ Galería</button>
               ${staged.length ? (finalizingIds.has(p.id)
                 ? `<button class="btn-primary" disabled style="padding:9px 14px;font-size:12.5px;opacity:0.6;">Subiendo…</button>`
                 : `<button class="btn-primary" style="padding:9px 14px;font-size:12.5px;" data-finalize="${p.id}">✅ Finalizar (${staged.length} foto${staged.length > 1 ? "s" : ""})</button>`
@@ -867,13 +923,17 @@ function renderOperator() {
         <input type="text" id="pedido-extra-input" placeholder="Agregar otro pedido a la ruta" style="flex:1" />
         <button class="btn-primary" id="add-pedido-extra" style="padding:0 14px;">+</button>
       </div>
-      ${delivered === pedidos.length && pedidos.length > 0 ? `<div class="done-msg">Ruta completa. Buen trabajo.</div>` : ""}
+      ${delivered === pedidos.length && pedidos.length > 0 ? `
+        <div class="done-msg">Ruta completa. Buen trabajo.</div>
+        <button class="btn-primary" id="finish-route" style="width:100%;margin-top:10px;padding:13px 0;font-size:15px;">🏁 Finalizar ruta</button>
+      ` : ""}
       ${currentJaulaLabel() ? `<button class="btn-link" id="restart-jaula" style="width:100%;margin-top:16px;color:var(--danger);">¿Jaula equivocada? Archivar esta ruta y elegir otra</button>` : ""}
     `;
   }
 
   root.innerHTML = `
-    <input type="file" accept="image/*" capture="environment" multiple id="photo-input" style="display:none" />
+    <input type="file" accept="image/*" capture="environment" multiple id="photo-input-camera" style="display:none" />
+    <input type="file" accept="image/*" multiple id="photo-input-gallery" style="display:none" />
     ${headerHtml({ title: name, subtitle: mode === "build" ? "Armando ruta" : `${delivered}/${pedidos.length} finalizados`, rightHtml: right })}
     <div class="container">${body}</div>`;
 
@@ -881,7 +941,7 @@ function renderOperator() {
 }
 
 function bindOperatorEvents() {
-  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; showJaulaPicker = false; showArchived = false; pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; issue = null; pedidos = []; mode = "build"; pendingPhotos = {}; showJaulaPicker = false; showArchived = false; routeLocked = false; pushView("name"); render(); };
   const addBtn = document.getElementById("add-pedido");
   if (addBtn) addBtn.onclick = () => { const inp = document.getElementById("pedido-input"); addPedido(inp.value); inp.value = ""; };
   const inp = document.getElementById("pedido-input");
@@ -892,11 +952,14 @@ function bindOperatorEvents() {
   if (extraInp) extraInp.addEventListener("keydown", (e) => { if (e.key === "Enter") { addPedido(extraInp.value); extraInp.value = ""; } });
   const startBtn = document.getElementById("start-route");
   if (startBtn) startBtn.onclick = startDeliveries;
+  const finishBtn = document.getElementById("finish-route");
+  if (finishBtn) finishBtn.onclick = finalizarRuta;
   const restartBtn = document.getElementById("restart-jaula");
   if (restartBtn) restartBtn.onclick = restartJaulaChoice;
   root.querySelectorAll("[data-move]").forEach((b) => { b.onclick = () => { const [i, d] = b.dataset.move.split(":"); movePedido(Number(i), Number(d)); }; });
   root.querySelectorAll("[data-remove]").forEach((b) => { b.onclick = () => removePedido(Number(b.dataset.remove)); });
-  root.querySelectorAll("[data-addphoto]").forEach((b) => { b.onclick = () => openCamera(b.dataset.addphoto); });
+  root.querySelectorAll("[data-camera]").forEach((b) => { b.onclick = () => openPhotoPicker(b.dataset.camera, "camera"); });
+  root.querySelectorAll("[data-gallery]").forEach((b) => { b.onclick = () => openPhotoPicker(b.dataset.gallery, "gallery"); });
   root.querySelectorAll("[data-status]").forEach((sel) => {
     sel.onchange = (e) => {
       const pedido = pedidos.find((p) => p.id === sel.dataset.status);
@@ -906,7 +969,8 @@ function bindOperatorEvents() {
   });
   root.querySelectorAll("[data-remove-photo]").forEach((b) => { b.onclick = () => { const [pid, idx] = b.dataset.removePhoto.split(":"); removePendingPhoto(pid, Number(idx)); }; });
   root.querySelectorAll("[data-finalize]").forEach((b) => { b.onclick = () => finalizarPedido(b.dataset.finalize); });
-  document.getElementById("photo-input").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
+  document.getElementById("photo-input-camera").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
+  document.getElementById("photo-input-gallery").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
 }
 
 function renderAdmin() {
@@ -925,6 +989,7 @@ function renderAdmin() {
     const unseen = Math.max(0, done - (seenCounts[iss.number] || 0));
     const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
     const isConfirmed = (iss.labels || []).some((l) => (typeof l === "string" ? l : l.name) === "confirmada");
+    const isFinished = (iss.labels || []).some((l) => (typeof l === "string" ? l : l.name) === "finalizada");
     return `
       <button class="stop-row clickable" data-open="${iss.number}" style="position:relative;">
         ${unseen > 0 ? `<div class="route-count-badge">${unseen}</div>` : ""}
@@ -932,7 +997,9 @@ function renderAdmin() {
         <div style="flex:1;text-align:left;">
           <div style="display:flex;align-items:center;gap:6px;">
             <div style="font-size:14px;font-weight:600;">${escapeHtml(opName)}</div>
-            ${isConfirmed
+            ${isFinished
+              ? `<span style="font-size:10px;font-weight:700;color:#1D4ED8;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:5px;padding:1px 6px;">🏁 Finalizada</span>`
+              : isConfirmed
               ? `<span style="font-size:10px;font-weight:700;color:#16A34A;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:5px;padding:1px 6px;">✅ Confirmada</span>`
               : `<span style="font-size:10px;font-weight:700;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:5px;padding:1px 6px;">⏳ Acomodando</span>`}
           </div>
@@ -955,7 +1022,7 @@ function renderAdmin() {
   document.getElementById("bell-btn").onclick = openActivityScreen;
   document.getElementById("refresh-btn").onclick = loadAdmin;
   document.getElementById("view-archived").onclick = loadArchived;
-  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; showArchived = false; stopAdminPolling(); pushView("name"); render(); };
+  document.getElementById("sign-out").onclick = () => { name = ""; showJaulaPicker = false; showArchived = false; routeLocked = false; stopAdminPolling(); pushView("name"); render(); };
   root.querySelectorAll("[data-open]").forEach((b) => { b.onclick = () => openAdminIssue(adminIssues.find((i) => String(i.number) === b.dataset.open)); });
 }
 
@@ -1041,7 +1108,10 @@ function renderAdminDetail() {
             </div>
           </div>`;
       }).join("")}
-      ${issueJaulaLabel(adminSelected) ? `<button class="btn-link" id="release-jaula-btn" style="width:100%;margin-top:22px;color:#B45309;">🔓 Liberar jaula asignada</button>` : ""}
+      ${(adminSelected.labels || []).some((l) => (typeof l === "string" ? l : l.name) === "finalizada")
+        ? `<button class="btn-link" id="reopen-btn" style="width:100%;margin-top:22px;color:#1D4ED8;">↩️ Reabrir ruta (permitir cambios)</button>`
+        : ""}
+      ${issueJaulaLabel(adminSelected) ? `<button class="btn-link" id="release-jaula-btn" style="width:100%;margin-top:10px;color:#B45309;">🔓 Liberar jaula asignada</button>` : ""}
       <button class="btn-link" id="archive-btn" style="width:100%;margin-top:10px;color:var(--danger);">🗄️ Archivar esta ruta</button>
     </div>`;
 
@@ -1049,6 +1119,8 @@ function renderAdminDetail() {
   document.getElementById("archive-btn").onclick = () => archiveRoute(adminSelected);
   const releaseBtn = document.getElementById("release-jaula-btn");
   if (releaseBtn) releaseBtn.onclick = () => releaseJaula(adminSelected);
+  const reopenBtn = document.getElementById("reopen-btn");
+  if (reopenBtn) reopenBtn.onclick = () => reopenFinishedRoute(adminSelected);
   hydrateAdminPhotos();
 }
 
