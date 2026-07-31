@@ -339,7 +339,7 @@ function buildBody(list) {
 /* ---------- operador: cargar/crear el issue de hoy ---------- */
 async function loadTodayIssue() {
   try {
-    const list = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=op-${opSlug},date-${todayISO()}&state=all`);
+    const list = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=op-${opSlug},date-${todayISO()}&state=open`);
     if (list && list.length) {
       issue = list[0];
       pedidos = parseBody(issue.body);
@@ -579,7 +579,7 @@ async function releaseJaula(iss) {
   const jaulaLabel = issueJaulaLabel(iss);
   if (!jaulaLabel) { alert("Esta ruta no tiene ninguna jaula asignada."); return; }
   const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
-  if (!confirm(`¿Liberar la jaula de ${opName}? Otro operador podrá elegirla, y esta ruta se oculta de tu panel (queda a salvo en el historial de GitHub por si la necesitas).`)) return;
+  if (!confirm(`¿Liberar la jaula de ${opName}? Otro operador podrá elegirla, y esta ruta se oculta de tu panel (queda a salvo en el historial de GitHub por si la necesitas).\n\nAvísale a ${opName} que cierre sesión (⎋) y vuelva a entrar en su celular — así le va a aparecer el selector de jaula de nuevo.`)) return;
   try {
     const labelNames = (iss.labels || []).map((l) => (typeof l === "string" ? l : l.name));
     await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}`, {
