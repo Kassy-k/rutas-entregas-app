@@ -107,9 +107,26 @@ async function fetchTakenJaulas() {
   return taken;
 }
 
+async function myOpenRouteToday() {
+  const list = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=op-${opSlug},date-${todayISO()}&state=open`);
+  return (list && list.length) ? list[0] : null;
+}
+
 async function chooseJaula(jaulaKey) {
   const rows = jaulaData[jaulaKey] || [];
   try {
+    // ¿ya tengo una ruta abierta hoy? (por ejemplo, si mi celular perdió la sesión y ya había elegido antes)
+    const mine = await myOpenRouteToday();
+    if (mine) {
+      issue = mine;
+      pedidos = parseBody(issue.body);
+      showJaulaPicker = false;
+      const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+      mode = labelNames.includes("confirmada") ? "deliver" : "build";
+      alert("Ya tenías una ruta activa hoy — te llevamos a esa en vez de crear una nueva.");
+      render();
+      return;
+    }
     // último chequeo justo antes de crear, por si alguien más la tomó apenas ahorita
     const fresh = await fetchTakenJaulas();
     if (fresh[slug(jaulaKey)]) {
@@ -161,6 +178,17 @@ async function restartJaulaChoice() {
 
 async function skipJaulaManual() {
   try {
+    const mine = await myOpenRouteToday();
+    if (mine) {
+      issue = mine;
+      pedidos = parseBody(issue.body);
+      showJaulaPicker = false;
+      const labelNames = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+      mode = labelNames.includes("confirmada") ? "deliver" : "build";
+      alert("Ya tenías una ruta activa hoy — te llevamos a esa en vez de crear una nueva.");
+      render();
+      return;
+    }
     issue = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`, {
       method: "POST",
       body: JSON.stringify({
@@ -840,6 +868,7 @@ function renderOperator() {
         <button class="btn-primary" id="add-pedido-extra" style="padding:0 14px;">+</button>
       </div>
       ${delivered === pedidos.length && pedidos.length > 0 ? `<div class="done-msg">Ruta completa. Buen trabajo.</div>` : ""}
+      ${currentJaulaLabel() ? `<button class="btn-link" id="restart-jaula" style="width:100%;margin-top:16px;color:var(--danger);">¿Jaula equivocada? Archivar esta ruta y elegir otra</button>` : ""}
     `;
   }
 
