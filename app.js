@@ -44,10 +44,12 @@ function parseCSV(text) {
 
 function matchesToday(fechaRaw) {
   const d = new Date();
-  const day = String(d.getDate());
+  const day = d.getDate();
   const month = MESES_ES[d.getMonth()];
   const parts = normalize(fechaRaw).split(/[^a-z0-9]+/).filter(Boolean);
-  return parts.includes(day) && parts.includes(month);
+  const hasDay = parts.some((p) => /^\d+$/.test(p) && Number(p) === day);
+  const hasMonth = parts.includes(month);
+  return hasDay && hasMonth;
 }
 
 async function fetchSheetData() {
@@ -78,7 +80,7 @@ async function loadJaulaOptions() {
     const todays = rows.filter((r) => matchesToday(r[col.fecha]));
     const byJaula = {};
     todays.forEach((r) => {
-      const j = (r[col.jaula] || "").trim();
+      const j = (r[col.jaula] || "").trim().toUpperCase();
       if (!j) return;
       if (!byJaula[j]) byJaula[j] = [];
       byJaula[j].push(r);
@@ -715,7 +717,7 @@ function renderRouteLocked() {
 
 function renderJaulaPicker() {
   const right = `<div class="header-right"><button class="icon" id="sign-out" title="Salir">⎋</button></div>`;
-  const keys = Object.keys(jaulaData).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+  const keys = Object.keys(jaulaData).sort((a, b) => a.localeCompare(b, "es", { numeric: true, sensitivity: "base" }));
   let body = "";
   if (jaulaLoading) {
     body = `<div class="center small"><div class="spinner"></div></div>`;
