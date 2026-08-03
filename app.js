@@ -53,8 +53,8 @@ function matchesToday(fechaRaw) {
 }
 
 async function fetchSheetData() {
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}`;
-  const res = await fetch(url);
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}&_=${Date.now()}`;
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error("La hoja de Sheets respondió con un error (status " + res.status + ")");
   const rows = parseCSV(await res.text());
   if (!rows.length) return { col: {}, rows: [] };
