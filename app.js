@@ -62,6 +62,16 @@ async function fetchSheetData() {
   const idx = (name) => header.indexOf(normalize(name));
   const col = { fecha: idx("FECHA"), pedido: idx("pedido"), jaula: idx("Jaula"), colonia: idx("COLONIA") };
   const dataRows = rows.slice(1).filter((r) => col.pedido >= 0 && (r[col.pedido] || "").trim());
+  // Si la columna "Jaula" viene de celdas combinadas en Sheets, solo la primera fila del grupo
+  // trae el valor y el resto se exporta vacío — aquí se "rellena hacia abajo" para recuperarlo.
+  if (col.jaula >= 0) {
+    let lastJaula = "";
+    for (const r of dataRows) {
+      const val = (r[col.jaula] || "").trim();
+      if (val) lastJaula = val;
+      else r[col.jaula] = lastJaula;
+    }
+  }
   return { col, rows: dataRows };
 }
 
@@ -418,7 +428,7 @@ function movePedido(i, dir) {
   render();
   if (mode === "deliver") {
     persistPedidos().catch(() => {});
-    addComment(`↕️ ${name} cambió el orden de su ruta`).catch(() => {});
+    addComment(`↕️ ${name}: "${pedidos[j].text}" pasó a posición ${j + 1} en lugar de "${pedidos[i].text}"`).catch(() => {});
   }
 }
 let routeLocked = false;
@@ -555,6 +565,8 @@ async function loadAdmin() {
   }
 }
 
+let lastActivityTimestamp = null;
+
 async function loadActivity() {
   const all = [];
   for (const iss of adminIssues) {
@@ -563,16 +575,43 @@ async function loadActivity() {
       const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
       comments.forEach((c) => {
         if (c.body.startsWith("📦") || c.body.startsWith("↕️") || c.body.startsWith("➕") || c.body.startsWith("✅")) {
-          all.push({ id: c.id, message: c.body.split("\n")[0], created_at: c.created_at });
+          all.push({ id: c.id, message: c.body.split("\n")[0], created_at: c.created_at, operatorName: opName });
         }
       });
     } catch { /* si un issue falla, seguimos con los demás */ }
   }
   all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  const newest = all[0];
+  if (lastActivityTimestamp && newest && new Date(newest.created_at) > new Date(lastActivityTimestamp) && newest.message.startsWith("📦")) {
+    playNotificationSound();
+  }
+  if (newest) lastActivityTimestamp = newest.created_at;
+
   activityFeed = all.slice(0, 50);
   let lastSeen = 0;
   try { lastSeen = Number(localStorage.getItem("rutas_admin_last_seen") || 0); } catch { /* ignorar */ }
   unreadCount = activityFeed.filter((e) => new Date(e.created_at).getTime() > lastSeen).length;
+}
+
+function playNotificationSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = "sine"; osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.start(); osc.stop(ctx.currentTime + 0.35);
+  } catch { /* algunos navegadores necesitan que el admin haya interactuado antes con la página */ }
+}
+
+function operatorColor(opName) {
+  const palette = ["#DC2626", "#EA580C", "#CA8A04", "#16A34A", "#0891B2", "#2563EB", "#7C3AED", "#DB2777", "#059669", "#4F46E5"];
+  let hash = 0;
+  for (let i = 0; i < opName.length; i++) hash = (hash * 31 + opName.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
 }
 
 async function loadArchived() {
@@ -1060,16 +1099,20 @@ function renderActivity() {
   root.innerHTML = `
     ${headerHtml({ title: "Notificaciones", subtitle: "Cambios de orden y evidencia reportada", back: true })}
     <div class="container">
-      ${!activityFeed.length ? `<div class="empty">Aún no hay actividad registrada hoy.</div>` : activityFeed.map((e) => `
-        <div class="stop-row" style="align-items:flex-start;">
+      ${!activityFeed.length ? `<div class="empty">Aún no hay actividad registrada hoy.</div>` : activityFeed.map((e) => {
+        const color = operatorColor(e.operatorName || "");
+        return `
+        <div class="stop-row" style="align-items:flex-start;border-left:4px solid ${color};">
           <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : e.message.startsWith("➕") ? "#2563EB" : e.message.startsWith("✅") ? "#16A34A" : "var(--amber)"};">
             ${e.message.startsWith("📦") ? "📷" : e.message.startsWith("➕") ? "➕" : e.message.startsWith("✅") ? "✅" : "↕"}
           </div>
           <div style="flex:1;">
+            <div style="font-size:11px;font-weight:700;color:${color};">${escapeHtml(e.operatorName || "")}</div>
             <div style="font-size:13.5px;">${escapeHtml(e.message)}</div>
             <div class="mono" style="font-size:11px;color:#94A3B8;margin-top:2px;">${timeAgo(e.created_at)}</div>
           </div>
-        </div>`).join("")}
+        </div>`;
+      }).join("")}
     </div>`;
   document.getElementById("back-btn").onclick = () => history.back();
 }
