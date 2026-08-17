@@ -54,7 +54,7 @@ function matchesToday(fechaRaw) {
 
 async function fetchSheetData() {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}&_=${Date.now()}`;
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetchWithTimeout(url, { cache: "no-store" });
   if (!res.ok) throw new Error("La hoja de Sheets respondió con un error (status " + res.status + ")");
   const rows = parseCSV(await res.text());
   if (!rows.length) return { col: {}, rows: [] };
@@ -159,7 +159,7 @@ async function chooseJaula(jaulaKey) {
       id: newId(),
       text: r[sheetCol.pedido].trim() + (sheetCol.colonia >= 0 && r[sheetCol.colonia] ? ` — ${r[sheetCol.colonia].trim()}` : ""),
       done: false,
-      resultado: "exitoso",
+      resultado: "exitoso", observaciones: "",
     }));
     showJaulaPicker = false;
     mode = "build";
@@ -237,8 +237,23 @@ function markRouteSeen(issueNumber, count) {
 }
 
 /* ---------- llamadas a GitHub ---------- */
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("Se agotó el tiempo de espera (tu conexión está muy lenta o inestable ahorita). Intenta de nuevo.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function gh(path, opts = {}) {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetchWithTimeout(`${API}${path}`, {
     ...opts,
     headers: {
       "Authorization": `Bearer ${getToken()}`,
@@ -254,7 +269,7 @@ async function gh(path, opts = {}) {
   return res.status === 204 ? null : res.json();
 }
 async function ghRaw(path) {
-  const res = await fetch(`${API}${path}`, {
+  const res = await fetchWithTimeout(`${API}${path}`, {
     headers: { "Authorization": `Bearer ${getToken()}`, "Accept": "application/vnd.github.raw" },
   });
   if (!res.ok) throw new Error(`GitHub API ${res.status}`);
@@ -337,7 +352,16 @@ let archivedIssues = [];
 let archivedLoading = false;
 
 /* ---------- visor de fotos en grande ---------- */
-function showLightbox(src) {
+let lightboxImages = [];
+let lightboxIndex = 0;
+
+function showLightbox(images, index = 0) {
+  lightboxImages = Array.isArray(images) ? images : [images];
+  lightboxIndex = index;
+  renderLightbox();
+}
+
+function renderLightbox() {
   let lb = document.getElementById("lightbox-overlay");
   if (!lb) {
     lb = document.createElement("div");
@@ -345,14 +369,26 @@ function showLightbox(src) {
     lb.className = "lightbox";
     document.body.appendChild(lb);
   }
-  lb.innerHTML = `<button class="lightbox-close" id="lightbox-close">✕</button><img src="${src}" />`;
+  const multi = lightboxImages.length > 1;
+  lb.innerHTML = `
+    <button class="lightbox-close" id="lightbox-close">✕</button>
+    ${multi ? `<button class="lightbox-nav lightbox-prev" id="lightbox-prev">‹</button>` : ""}
+    <img src="${lightboxImages[lightboxIndex]}" />
+    ${multi ? `<button class="lightbox-nav lightbox-next" id="lightbox-next">›</button>` : ""}
+    ${multi ? `<div class="lightbox-counter">${lightboxIndex + 1} / ${lightboxImages.length}</div>` : ""}
+  `;
   lb.style.display = "flex";
   lb.onclick = (e) => { if (e.target === lb || e.target.id === "lightbox-close") lb.style.display = "none"; };
+  const prevBtn = document.getElementById("lightbox-prev");
+  if (prevBtn) prevBtn.onclick = (e) => { e.stopPropagation(); lightboxIndex = (lightboxIndex - 1 + lightboxImages.length) % lightboxImages.length; renderLightbox(); };
+  const nextBtn = document.getElementById("lightbox-next");
+  if (nextBtn) nextBtn.onclick = (e) => { e.stopPropagation(); lightboxIndex = (lightboxIndex + 1) % lightboxImages.length; renderLightbox(); };
 }
 
 /* ---------- estatus de cada pedido ---------- */
 const STATUS_OPTIONS = [
   { value: "exitoso", label: "✅ Exitoso", color: "#166534", bg: "#F0FDF4", border: "#BBF7D0" },
+  { value: "parcial", label: "🟣 Parcial", color: "#6D28D9", bg: "#F5F3FF", border: "#DDD6FE" },
   { value: "rechazado", label: "❌ Rechazado", color: "#991B1B", bg: "#FEF2F2", border: "#FECACA" },
   { value: "reprogramado", label: "🔁 Reprogramado", color: "#92400E", bg: "#FFFBEB", border: "#FDE68A" },
   { value: "no-entregado", label: "🚫 No entregado", color: "#334155", bg: "#F1F5F9", border: "#CBD5E1" },
@@ -367,13 +403,23 @@ function parseBody(body) {
       const done = /^- \[x\]/i.test(l.trim());
       let text = l.replace(/^- \[[ xX]\]\s*/, "").trim();
       let resultado = "exitoso";
+      let observaciones = "";
+      const obsMatch = text.match(/\{obs:([^}]*)\}\s*$/i);
+      if (obsMatch) {
+        try { observaciones = decodeURIComponent(obsMatch[1]); } catch { observaciones = ""; }
+        text = text.slice(0, obsMatch.index).trim();
+      }
       const m = text.match(/\s*\{resultado:([a-z-]+)\}\s*$/i);
       if (m) { resultado = m[1]; text = text.slice(0, m.index).trim(); }
-      return { id: newId(), done, text, resultado };
+      return { id: newId(), done, text, resultado, observaciones };
     });
 }
 function buildBody(list) {
-  return list.map((p) => `- [${p.done ? "x" : " "}] ${p.text} {resultado:${p.resultado || "exitoso"}}`).join("\n");
+  return list.map((p) => {
+    let line = `- [${p.done ? "x" : " "}] ${p.text} {resultado:${p.resultado || "exitoso"}}`;
+    if (p.observaciones && p.observaciones.trim()) line += `{obs:${encodeURIComponent(p.observaciones.trim())}}`;
+    return line;
+  }).join("\n");
 }
 
 /* ---------- operador: cargar/crear el issue de hoy ---------- */
@@ -413,7 +459,7 @@ async function addComment(message) {
 
 function addPedido(text) {
   if (!text.trim()) return;
-  pedidos.push({ id: newId(), text: text.trim(), done: false, resultado: "exitoso" });
+  pedidos.push({ id: newId(), text: text.trim(), done: false, resultado: "exitoso", observaciones: "" });
   render();
   if (mode === "deliver") {
     persistPedidos().catch(() => { /* se reintenta solo la próxima vez que se guarde algo */ });
@@ -535,6 +581,37 @@ async function finalizarPedido(pedidoId) {
   }
 }
 
+async function uploadExtraPhoto(pedidoId) {
+  if (finalizingIds.has(pedidoId)) return;
+  const staged = pendingPhotos[pedidoId] || [];
+  if (!staged.length) return;
+  const pedido = pedidos.find((p) => p.id === pedidoId);
+  finalizingIds.add(pedidoId);
+  uploading = true; render();
+  try {
+    const stamp = Date.now();
+    const paths = [];
+    for (let n = 0; n < staged.length; n++) {
+      const b64 = await compressImage(staged[n].file);
+      const path = `evidence/${opSlug}/${todayISO()}/${stamp}-extra-${n}.jpg`;
+      await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`, {
+        method: "PUT",
+        body: JSON.stringify({ message: `Evidencia extra: ${pedido.text}`, content: b64 }),
+      });
+      paths.push(path);
+    }
+    const time = timeLabel(new Date().toISOString());
+    await addComment(`📎 ${pedido.text} — foto extra agregada ${time}\nFotos: ${paths.join(", ")}`);
+    delete pendingPhotos[pedidoId];
+    render();
+  } catch (err) {
+    alert("No se pudo subir la foto extra: " + err.message);
+  } finally {
+    finalizingIds.delete(pedidoId);
+    uploading = false; render();
+  }
+}
+
 /* ---------- admin ---------- */
 let adminPollTimer = null;
 function startAdminPolling() {
@@ -574,7 +651,7 @@ async function loadActivity() {
       const comments = await gh(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${iss.number}/comments?per_page=50`);
       const opName = iss.title.replace(/^Ruta\s*—\s*/, "").split("—")[0].trim();
       comments.forEach((c) => {
-        if (c.body.startsWith("📦") || c.body.startsWith("↕️") || c.body.startsWith("➕") || c.body.startsWith("✅")) {
+        if (c.body.startsWith("📦") || c.body.startsWith("↕️") || c.body.startsWith("➕") || c.body.startsWith("✅") || c.body.startsWith("📎")) {
           all.push({ id: c.id, message: c.body.split("\n")[0], created_at: c.created_at, operatorName: opName });
         }
       });
@@ -583,7 +660,7 @@ async function loadActivity() {
   all.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   const newest = all[0];
-  if (lastActivityTimestamp && newest && new Date(newest.created_at) > new Date(lastActivityTimestamp) && newest.message.startsWith("📦")) {
+  if (lastActivityTimestamp && newest && new Date(newest.created_at) > new Date(lastActivityTimestamp) && (newest.message.startsWith("📦") || newest.message.startsWith("📎"))) {
     playNotificationSound();
   }
   if (newest) lastActivityTimestamp = newest.created_at;
@@ -718,14 +795,20 @@ async function hydrateAdminPhotos() {
     const m = c.body.match(/Fotos:\s*(.+)/);
     if (!m) continue;
     const paths = m[1].split(",").map((p) => p.trim());
-    for (const p of paths) {
+    const urls = new Array(paths.length).fill(null);
+    for (let idx = 0; idx < paths.length; idx++) {
+      const p = paths[idx];
       const img = document.querySelector(`img[data-path="${CSS.escape(p)}"]`);
       if (img && !img.src) {
         try {
           const blob = await ghRaw(`/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${p}`);
           const url = URL.createObjectURL(blob);
+          urls[idx] = url;
           img.src = url;
-          img.onclick = () => showLightbox(url);
+          img.onclick = () => {
+            const gallery = urls.filter(Boolean);
+            showLightbox(gallery, gallery.indexOf(url));
+          };
         } catch { /* foto no disponible */ }
       }
     }
@@ -938,10 +1021,29 @@ function renderOperator() {
               <button class="btn-icon" data-move="${i}:-1" ${i === 0 ? "disabled" : ""}>↑</button>
               <button class="btn-icon" data-move="${i}:1" ${i === pedidos.length - 1 ? "disabled" : ""}>↓</button>` : ""}
           </div>
-          ${p.done ? `<div class="mono" style="font-size:12px;font-weight:700;color:${meta.color};background:${meta.bg};border:1px solid ${meta.border};border-radius:6px;padding:3px 8px;">${meta.label}</div>` : `
+          ${p.done ? `
+            <div class="mono" style="font-size:12px;font-weight:700;color:${meta.color};background:${meta.bg};border:1px solid ${meta.border};border-radius:6px;padding:3px 8px;">${meta.label}</div>
+            ${p.observaciones ? `<div style="font-size:12px;color:#64748B;font-style:italic;">📝 ${escapeHtml(p.observaciones)}</div>` : ""}
+            ${staged.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${staged.map((s, sIdx) => `
+                <div style="position:relative;">
+                  <img src="${s.previewUrl}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--line);" />
+                  <button data-remove-photo="${p.id}:${sIdx}" style="position:absolute;top:-6px;right:-6px;background:var(--danger);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:11px;cursor:pointer;">✕</button>
+                </div>`).join("")}
+            </div>` : ""}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn-secondary" data-camera="${p.id}">📎 Cámara</button>
+              <button class="btn-secondary" data-gallery="${p.id}">📎 Galería</button>
+              ${staged.length ? (finalizingIds.has(p.id)
+                ? `<button class="btn-primary" disabled style="padding:9px 14px;font-size:12.5px;opacity:0.6;">Subiendo…</button>`
+                : `<button class="btn-primary" style="padding:9px 14px;font-size:12.5px;" data-upload-extra="${p.id}">☁️ Subir foto extra</button>`
+              ) : ""}
+            </div>
+          ` : `
             <select data-status="${p.id}" style="border:1px solid ${meta.border};background:${meta.bg};color:${meta.color};border-radius:7px;padding:7px 8px;font-size:12.5px;font-weight:600;width:100%;">
               ${STATUS_OPTIONS.map((o) => `<option value="${o.value}" ${p.resultado === o.value ? "selected" : ""}>${o.label}</option>`).join("")}
             </select>
+            <textarea data-obs="${p.id}" placeholder="Observaciones (opcional)" rows="2" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:7px 8px;font-size:12.5px;font-family:inherit;resize:vertical;">${escapeHtml(p.observaciones || "")}</textarea>
             ${staged.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
               ${staged.map((s, sIdx) => `
                 <div style="position:relative;">
@@ -1010,6 +1112,13 @@ function bindOperatorEvents() {
   });
   root.querySelectorAll("[data-remove-photo]").forEach((b) => { b.onclick = () => { const [pid, idx] = b.dataset.removePhoto.split(":"); removePendingPhoto(pid, Number(idx)); }; });
   root.querySelectorAll("[data-finalize]").forEach((b) => { b.onclick = () => finalizarPedido(b.dataset.finalize); });
+  root.querySelectorAll("[data-upload-extra]").forEach((b) => { b.onclick = () => uploadExtraPhoto(b.dataset.uploadExtra); });
+  root.querySelectorAll("[data-obs]").forEach((ta) => {
+    ta.oninput = (e) => {
+      const pedido = pedidos.find((p) => p.id === ta.dataset.obs);
+      if (pedido) pedido.observaciones = e.target.value;
+    };
+  });
   document.getElementById("photo-input-camera").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
   document.getElementById("photo-input-gallery").onchange = (e) => onPhotosChosen(Array.from(e.target.files));
 }
@@ -1103,8 +1212,8 @@ function renderActivity() {
         const color = operatorColor(e.operatorName || "");
         return `
         <div class="stop-row" style="align-items:flex-start;border-left:4px solid ${color};">
-          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : e.message.startsWith("➕") ? "#2563EB" : e.message.startsWith("✅") ? "#16A34A" : "var(--amber)"};">
-            ${e.message.startsWith("📦") ? "📷" : e.message.startsWith("➕") ? "➕" : e.message.startsWith("✅") ? "✅" : "↕"}
+          <div class="stop-badge" style="background:${e.message.startsWith("📦") ? "var(--route)" : e.message.startsWith("📎") ? "#0891B2" : e.message.startsWith("➕") ? "#2563EB" : e.message.startsWith("✅") ? "#16A34A" : "var(--amber)"};">
+            ${e.message.startsWith("📦") ? "📷" : e.message.startsWith("📎") ? "📎" : e.message.startsWith("➕") ? "➕" : e.message.startsWith("✅") ? "✅" : "↕"}
           </div>
           <div style="flex:1;">
             <div style="font-size:11px;font-weight:700;color:${color};">${escapeHtml(e.operatorName || "")}</div>
@@ -1134,10 +1243,11 @@ function renderAdminDetail() {
       ${adminSelectedPedidos.map((p, i) => {
         const meta = statusMeta(p.resultado);
         return `
-        <div class="stop-row">
+        <div class="stop-row" style="flex-wrap:wrap;">
           <div class="stop-badge ${p.done ? "done" : ""}">${i + 1}</div>
           <div class="stop-address">${escapeHtml(p.text)}</div>
           ${p.done ? `<div class="mono" style="font-size:11px;font-weight:700;color:${meta.color};background:${meta.bg};border:1px solid ${meta.border};border-radius:6px;padding:2px 7px;flex-shrink:0;">${meta.label}</div>` : ""}
+          ${p.observaciones ? `<div style="width:100%;font-size:12px;color:#64748B;font-style:italic;margin-top:4px;margin-left:36px;">📝 ${escapeHtml(p.observaciones)}</div>` : ""}
         </div>`;
       }).join("")}
       <div style="margin:18px 0 8px;font-size:12.5px;font-weight:700;color:#64748B;">EVIDENCIA</div>
