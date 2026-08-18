@@ -61,6 +61,7 @@ async function fetchSheetData() {
   const header = rows[0].map(normalize);
   const idx = (name) => header.indexOf(normalize(name));
   const col = { fecha: idx("FECHA"), pedido: idx("pedido"), jaula: idx("Jaula"), colonia: idx("COLONIA") };
+  if (col.fecha < 0) col.fecha = 0; // si el encabezado "FECHA" no está (por ejemplo, se borró sin querer), usar la columna A como respaldo
   const dataRows = rows.slice(1).filter((r) => col.pedido >= 0 && (r[col.pedido] || "").trim());
   // Si la columna "Jaula" viene de celdas combinadas en Sheets, solo la primera fila del grupo
   // trae el valor y el resto se exporta vacío — aquí se "rellena hacia abajo" para recuperarlo.
