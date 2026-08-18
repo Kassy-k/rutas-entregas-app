@@ -45,10 +45,10 @@ function parseCSV(text) {
 function matchesToday(fechaRaw) {
   const d = new Date();
   const day = d.getDate();
-  const month = MESES_ES[d.getMonth()];
+  const monthAbbrev = MESES_ES[d.getMonth()].slice(0, 3); // "ago", "jul", etc. — cubre "18-ago" y "18-agosto" por igual
   const parts = normalize(fechaRaw).split(/[^a-z0-9]+/).filter(Boolean);
   const hasDay = parts.some((p) => /^\d+$/.test(p) && Number(p) === day);
-  const hasMonth = parts.includes(month);
+  const hasMonth = parts.some((p) => p.startsWith(monthAbbrev));
   return hasDay && hasMonth;
 }
 
